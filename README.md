@@ -1,44 +1,61 @@
 # AIStory
 
-AIStory is a children’s story web application designed to turn short prompts into a full illustrated bedtime story.
+AIStory turns a short prompt into a complete illustrated children's mini-book.
 
-## Vision
+The current MVP defaults to local demo mode, so you can test the full product loop without external API keys:
 
-Let parents and caregivers quickly generate a child-friendly story with matching illustrations by entering a simple idea, selecting a theme or art style, and choosing how many pages the story should have.
+- Set the book with characters, picture references, language, age, theme, optional art style direction, and page count.
+- Save and reuse past characters from the Characters dialog.
+- Enter a story idea.
+- Generate a complete structured book.
+- Reopen or recreate the last 10 generated stories from History.
+- Preview page text with matching local SVG illustrations or API-generated images.
+- Regenerate a page image from its illustration prompt.
+- Clear the current story with confirmation.
+- Print the result or download the generated JSON.
+- Manage active models, endpoints, keys, provider badges, and the premade prompt preview from the Settings dialog.
+- Review local estimated usage by model and key from the Usage dialog.
 
-## Core features
+Built-in story API models include OpenAI GPT-5.5, Anthropic Claude Opus 4.7, Google Gemini 3 Pro Preview, and xAI Grok 4.3.
+Built-in image API models include OpenAI GPT Image 2, OpenAI GPT Image 1.5, Google Gemini 3.1 Flash Image Preview, Google Gemini 3 Pro Image Preview, and Google Gemini 2.5 Flash Image. API keys are stored in the browser for development only.
 
-- Prompt-based story generation
-- Story theme and art-style selection
-- Optional reference image support
-- Multi-page story output
-- One illustration generated for each story page
-- Consistent visual style across all pages
+## Project Artifacts
 
-## Project artifacts
+- `PROJECT-INSTRUCTIONS.md` - source-of-truth handoff for product, engineering, UX, data shape, and next steps.
+- `PROJECT-SPEC.md` - product spec, data model, API contract, and implementation plan.
+- `src/api/localStoryEngine.js` - local demo generator for testable story output.
+- `src/api/storyModelClient.js` - story model prompt builder and story provider clients.
+- `src/components/CharacterManager.jsx` - reusable character library dialog.
+- `src/components/StoryHistory.jsx` - past story history dialog.
+- `src/components/SettingsManager.jsx` - model, endpoint, key, and premade prompt manager.
+- `src/components/UsageManager.jsx` - local estimated model/key usage dialog.
+- `src/components/PromptForm.jsx` - story creation form with cast and reference image controls.
+- `src/components/StoryPreview.jsx` - book preview, page navigation, print, and JSON export.
 
-- `PROJECT-SPEC.md` — source of truth and implementation plan
-- `package.json` — project dependencies and scripts
-- `vite.config.js` — Vite configuration for React
-- `src/` — front-end application code
+## Getting Started
 
-## Getting started
+Install dependencies:
 
-1. Install dependencies:
+```powershell
+npm install
+```
 
-   ```powershell
-   npm install
-   ```
+Run the development server:
 
-2. Run the development server:
+```powershell
+npm run dev
+```
 
-   ```powershell
-   npm run dev
-   ```
+Build for production:
 
-## Next steps
+```powershell
+npm run build
+```
 
-- Connect the app to a backend or serverless route that calls the Multiplay image generation API
-- Add text generation integration for story creation
-- Implement page-level image generation and preview
-- Add export or download support
+## Next Steps
+
+- Add `/api/generate-story` as a backend orchestration endpoint.
+- Move production provider keys to server-side environment variables.
+- Move story and image provider calls behind backend routes.
+- Connect Multiplay image generation.
+- Add per-page editing and PDF export.
