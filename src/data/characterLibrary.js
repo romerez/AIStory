@@ -58,16 +58,17 @@ export function upsertSavedCharacters(existingCharacters, incomingCharacters) {
 }
 
 function normalizeSavedCharacter(character = {}) {
+  const safeCharacter = character && typeof character === 'object' ? character : {};
   const now = new Date().toISOString();
 
   return {
-    id: character.id || `saved-character-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: String(character.name || '').trim(),
-    role: String(character.role || 'supporting character').trim(),
-    description: String(character.description || '').trim(),
-    referenceImageUrl: String(character.referenceImageUrl || '').trim(),
-    createdAt: character.createdAt || now,
-    updatedAt: character.updatedAt || now,
+    id: safeCharacter.id || `saved-character-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: String(safeCharacter.name || '').trim(),
+    role: String(safeCharacter.role || 'supporting character').trim(),
+    description: String(safeCharacter.description || '').trim(),
+    referenceImageUrl: String(safeCharacter.referenceImageUrl || '').trim(),
+    createdAt: safeCharacter.createdAt || now,
+    updatedAt: safeCharacter.updatedAt || now,
   };
 }
 

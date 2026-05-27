@@ -278,7 +278,7 @@ export async function generateLocalBook(request) {
   const artStyle = cleanText(request.artStyle, 140) || defaultArtStyleDirection;
   const language = request.language || 'English';
   const languageProfile = getLanguageProfile(language);
-  const themeProfile = themeProfiles[theme] || themeProfiles.bedtime;
+  const themeProfile = getThemeProfile(theme);
   const localizedTheme = getLocalizedTheme(theme, themeProfile, languageProfile);
   const styleProfile = getStyleProfile(request.artStyle);
   const pageCount = clamp(Number(request.pageCount) || 6, 2, 12);
@@ -312,6 +312,8 @@ export async function generateLocalBook(request) {
     repeatedVisualDetails: [
       styleProfile.marker,
       themeProfile.guide,
+      `${themeProfile.setting} is the stable primary story stage`,
+      'same indoor/outdoor choice, background landmarks, central props, and layout across pages',
       `${joinNames(characters.map((character) => character.name))} stay visually consistent`,
       'rounded child-friendly shapes',
       'warm, reassuring expressions',
@@ -338,9 +340,18 @@ export async function generateLocalBook(request) {
       languageProfile,
       childAge: request.childAge || '4-6',
     });
+    const imageDescription = buildPageImageDescription({
+      pageNumber,
+      pageCount,
+      text,
+      characters,
+      themeProfile,
+      localizedTheme,
+    });
     const illustrationPrompt = buildIllustrationPrompt({
       pageNumber,
       text,
+      imageDescription,
       artStyle,
       visualBible,
       themeProfile,
@@ -350,6 +361,7 @@ export async function generateLocalBook(request) {
     return {
       pageNumber,
       text,
+      imageDescription,
       illustrationPrompt,
       imageUrl: buildSvgIllustration({
         pageNumber,
@@ -388,7 +400,7 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
   const artStyle = cleanText(request.artStyle, 140) || defaultArtStyleDirection;
   const language = request.language || 'English';
   const languageProfile = getLanguageProfile(language);
-  const themeProfile = themeProfiles[theme] || themeProfiles.bedtime;
+  const themeProfile = getThemeProfile(theme);
   const localizedTheme = getLocalizedTheme(theme, themeProfile, languageProfile);
   const styleProfile = getStyleProfile(request.artStyle);
   const pageCount = clamp(Number(request.pageCount) || 6, 2, 12);
@@ -420,6 +432,8 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
     repeatedVisualDetails: [
       styleProfile.marker,
       themeProfile.guide,
+      `${themeProfile.setting} is the stable primary story stage`,
+      'same indoor/outdoor choice, background landmarks, central props, and layout across pages',
       `${joinNames(characters.map((character) => character.name))} stay visually consistent`,
       'rounded child-friendly shapes',
       'warm, reassuring expressions',
@@ -448,9 +462,21 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
       languageProfile,
       childAge: request.childAge || '4-6',
     });
+    const imageDescription = cleanText(
+      draftPage?.imageDescription || draftPage?.illustrationDescription || draftPage?.visualDescription,
+      650,
+    ) || buildPageImageDescription({
+      pageNumber,
+      pageCount,
+      text,
+      characters,
+      themeProfile,
+      localizedTheme,
+    });
     const illustrationPrompt = buildIllustrationPrompt({
       pageNumber,
       text,
+      imageDescription,
       artStyle,
       visualBible,
       themeProfile,
@@ -460,6 +486,7 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
     return {
       pageNumber,
       text,
+      imageDescription,
       illustrationPrompt,
       imageUrl: buildSvgIllustration({
         pageNumber,
@@ -493,7 +520,7 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
 }
 
 export function regenerateLocalPageImage(book, pageNumber) {
-  const themeProfile = themeProfiles[book.theme] || themeProfiles.bedtime;
+  const themeProfile = getThemeProfile(book.theme);
   const styleProfile = getStyleProfile(book.artStyle);
   const characters = book.visualBible?.characters?.length
     ? book.visualBible.characters
@@ -521,6 +548,108 @@ export function regenerateLocalPageImage(book, pageNumber) {
       };
     }),
   };
+}
+
+export function updateBookPageContent(book, pageNumber, updates = {}) {
+  const pages = (book.pages || []).map((page) => {
+    if (page.pageNumber !== pageNumber) {
+      return page;
+    }
+
+    const nextPage = {
+      ...page,
+      text: cleanText(updates.text ?? page.text, 1200) || page.text,
+      imageDescription: cleanText(
+        updates.imageDescription ?? page.imageDescription,
+        800,
+      ) || page.imageDescription || page.text,
+      imageStatus: 'pending',
+      imageError: '',
+    };
+
+    return {
+      ...nextPage,
+      illustrationPrompt: buildIllustrationPromptForPage(book, nextPage),
+    };
+  });
+
+  return {
+    ...book,
+    workflowStage: 'story-draft',
+    pages,
+  };
+}
+
+export function regenerateLocalPageText(book, pageNumber) {
+  const page = (book.pages || []).find((item) => item.pageNumber === pageNumber);
+
+  if (!page) {
+    return book;
+  }
+
+  const revisedText = createLocalRevisionText(book, page);
+  const imageDescription = [
+    `A refreshed version of page ${pageNumber}.`,
+    'Show the same characters in the same physical location, with the same background landmarks, central props, indoor/outdoor choice, and general character positions, but make the page moment feel clearer and warmer.',
+    `Specific scene: ${revisedText}`,
+  ].join(' ');
+
+  return updateBookPageContent(book, pageNumber, {
+    text: revisedText,
+    imageDescription,
+  });
+}
+
+export function buildIllustrationPromptForPage(book, page) {
+  const themeProfile = getThemeProfile(book.theme);
+  const fallbackStyleProfile = getStyleProfile(book.artStyle);
+  const visualBible = book.visualBible || {
+    mainCharacter: 'The main character',
+    characters: normalizeCharacters([], {
+      prompt: book.storySummary || '',
+      styleProfile: fallbackStyleProfile,
+    }),
+    setting: themeProfile.setting,
+    palette: themeProfile.palette,
+    repeatedVisualDetails: [
+      fallbackStyleProfile.marker,
+      themeProfile.guide,
+      `${themeProfile.setting} is the stable primary story stage`,
+      'same indoor/outdoor choice, background landmarks, central props, and layout across pages',
+      'rounded child-friendly shapes',
+      'warm, reassuring expressions',
+    ],
+    safetyNotes: [
+      'age-appropriate language',
+      'gentle conflict',
+      'no frightening imagery',
+      'no text inside illustrations',
+    ],
+  };
+
+  return buildIllustrationPrompt({
+    pageNumber: page.pageNumber,
+    text: page.text,
+    imageDescription: page.imageDescription || page.text,
+    artStyle: book.artStyle,
+    visualBible,
+    themeProfile,
+    referenceImageUrl: book.requestSnapshot?.referenceImageUrl,
+  });
+}
+
+function createLocalRevisionText(book, page) {
+  const language = String(book.language || '').toLowerCase();
+
+  if (language.includes('hebrew')) {
+    return `${page.text} עוד רגע קטן מתבהר, והלב של הדמויות מרגיש בטוח יותר.`;
+  }
+
+  if (language.includes('spanish')) {
+    return `${page.text} Esta vez, el momento se siente un poco mas claro, calido y facil de imaginar.`;
+  }
+
+  return `${page.text} This time, the moment feels a little clearer, warmer, and easier to picture.`;
 }
 
 function normalizeCharacters(rawCharacters, { prompt, styleProfile }) {
@@ -595,7 +724,7 @@ function cleanUrl(value) {
     return null;
   }
 
-  return /^https?:\/\//i.test(url) ? url : null;
+  return /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : null;
 }
 
 function joinNames(names) {
@@ -664,6 +793,35 @@ function getLocalizedTheme(theme, themeProfile, languageProfile) {
     mood: themeProfile.mood,
     guide: themeProfile.guide,
   };
+}
+
+function getThemeProfile(theme) {
+  const themeKey = String(theme || '').trim();
+
+  if (themeProfiles[themeKey]) {
+    return themeProfiles[themeKey];
+  }
+
+  const cleanTheme = cleanText(themeKey, 80) || 'imagination';
+  const titleTheme = toTitleCase(cleanTheme);
+
+  return {
+    setting: `a cozy, consistent story space built around ${cleanTheme}, with a shared table, familiar background landmarks, and gentle light`,
+    settingShort: `${cleanTheme} story space`,
+    guide: `a small ${cleanTheme} clue`,
+    closing: `${cleanTheme} can feel easier when everyone takes one kind step together`,
+    object: titleTheme,
+    mood: 'warm and curious',
+    palette: ['#95d5b2', '#ffd166', '#6ec6ca', '#fff7df'],
+  };
+}
+
+function toTitleCase(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
+    .join(' ');
 }
 
 function getStyleProfile(artStyle) {
@@ -796,18 +954,20 @@ function buildPageText({
 function buildIllustrationPrompt({
   pageNumber,
   text,
+  imageDescription,
   artStyle,
   visualBible,
   themeProfile,
   referenceImageUrl,
 }) {
   const styleInstruction = cleanText(artStyle, 140) || defaultArtStyleDirection;
+  const setting = visualBible.setting || themeProfile.setting;
   const referenceInstruction = referenceImageUrl
-    ? `Use the reference image for visual tone only: ${referenceImageUrl}.`
-    : 'No external reference image.';
+    ? `Use the overall style reference for visual tone and composition: ${formatReferenceSource(referenceImageUrl)}.`
+    : 'No overall style reference was supplied.';
   const characterInstructions = visualBible.characters.map((character) => {
     const reference = character.hasReferenceImage
-      ? `Keep close to the supplied reference for ${character.name}.`
+      ? `Keep close to the supplied reference for ${character.name}: ${formatReferenceSource(character.referenceImageUrl)}.`
       : `Design ${character.name} from description only.`;
 
     return `${character.name}: ${character.description}; role: ${character.role}. ${reference}`;
@@ -817,14 +977,62 @@ function buildIllustrationPrompt({
     `Page ${pageNumber} children's book illustration.`,
     visualBible.mainCharacter,
     `Cast: ${characterInstructions.join(' ')}`,
-    `Setting: ${themeProfile.setting}.`,
+    `Setting: ${setting}.`,
     `Style: ${styleInstruction}.`,
     `Palette: ${visualBible.palette.join(', ')}.`,
     `Recurring details: ${visualBible.repeatedVisualDetails.join(', ')}.`,
+    'Character consistency lock: keep each named character with the same face shape, hair, skin tone, body proportions, outfit, clothing colors, accessories, and overall illustration style on every page.',
+    `Location and layout lock: keep the same physical stage across pages: ${setting}. Preserve the same indoor/outdoor choice, stable background landmarks, central props, and the general left-to-right relationship of recurring characters and objects. Do not move to a different room, classroom, park, or outdoor/indoor location unless the page text explicitly says the story moved.`,
+    'Environment consistency lock: keep the same core world, lighting mood, palette, and recurring background details across pages; only change the camera angle, pose, action, and small props needed for this page.',
+    'If the page image description conflicts with the location and layout lock, keep the locked location and translate only the action, emotion, and page-specific props into that same stage.',
+    'If a character description or reference image includes clothing, preserve it exactly. If clothing is not specified, infer one simple outfit and keep it unchanged throughout the book.',
+    'Landscape-safe framing: place the full important scene comfortably inside the image with generous margins. Do not crop faces, hands, bodies, key objects, or important background details at the edges.',
+    `Page image description: ${imageDescription}.`,
     `Scene text to illustrate: ${text}`,
     referenceInstruction,
+    'Use the page image description as the main composition plan, and use the page text as narrative context.',
+    'Keep every recurring character visually consistent with the visual bible and any supplied picture references.',
     'Gentle, child-safe, no scary imagery, no readable text inside the image.',
   ].join(' ');
+}
+
+function buildPageImageDescription({
+  pageNumber,
+  pageCount,
+  text,
+  characters,
+  themeProfile,
+  localizedTheme,
+}) {
+  const characterNames = joinNames(characters.map((character) => character.name));
+  const focus = pageNumber === 1
+    ? 'introducing the characters and the story question'
+    : pageNumber === pageCount
+      ? 'showing the warm resolution and emotional closure'
+      : 'showing the important action and discovery from this page';
+
+  return [
+    `${characterNames} in ${themeProfile.setting}.`,
+    `Keep the same primary story stage and stable background landmarks from page to page: ${themeProfile.setting}.`,
+    'Keep central props and recurring character positions coherent across pages; do not switch indoor/outdoor location unless the page text explicitly says the story moved.',
+    `Visual focus: ${focus}.`,
+    `Mood: ${localizedTheme.mood}.`,
+    `Important recurring object: ${localizedTheme.guide}.`,
+    'Composition: landscape-safe framing with generous margins, no cropped characters or important objects.',
+    `Depict the specific moment from the page text: ${text}`,
+  ].join(' ');
+}
+
+function formatReferenceSource(referenceImageUrl) {
+  if (!referenceImageUrl) {
+    return 'reference image metadata is not available';
+  }
+
+  if (String(referenceImageUrl).startsWith('data:image/')) {
+    return 'uploaded image reference attached in the request metadata';
+  }
+
+  return referenceImageUrl;
 }
 
 function buildSvgIllustration({ pageNumber, pageCount, themeProfile, styleProfile, characters, variation = 0 }) {

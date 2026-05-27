@@ -17,7 +17,7 @@ function createCharacter(values = {}) {
   };
 }
 
-function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraftChange }) {
+function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, characterToUse, onDraftChange }) {
   const [prompt, setPrompt] = useState(samplePrompt);
   const [characters, setCharacters] = useState(() => [
     createCharacter({
@@ -30,6 +30,7 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
   const [language, setLanguage] = useState('English');
   const [childAge, setChildAge] = useState('4-6');
   const [theme, setTheme] = useState('bedtime');
+  const [customTheme, setCustomTheme] = useState('');
   const [artStyle, setArtStyle] = useState('');
   const [pageCount, setPageCount] = useState(6);
   const [referenceImageUrl, setReferenceImageUrl] = useState('');
@@ -43,6 +44,7 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
   const imageModelId = modelSettings.activeImageModelId || modelSettings.imageModels[0]?.id || '';
   const selectedStoryModel = modelSettings.storyModels.find((model) => model.id === storyModelId)
     || modelSettings.storyModels[0];
+  const submitLabel = processState?.stage === 'story' ? 'Writing story...' : 'Generate story text';
 
   useEffect(() => {
     return () => {
@@ -89,6 +91,7 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
     artStyle,
     characters,
     childAge,
+    customTheme,
     imageModelId,
     language,
     pageCount,
@@ -104,6 +107,8 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
   }, [onDraftChange, requestPreview]);
 
   function buildRequest() {
+    const cleanCustomTheme = customTheme.trim();
+
     return {
       prompt: prompt.trim(),
       storyModelId,
@@ -117,7 +122,9 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
       })),
       language,
       childAge,
-      theme,
+      theme: cleanCustomTheme || theme,
+      themePreset: theme,
+      customTheme: cleanCustomTheme,
       artStyle: artStyle.trim(),
       pageCount,
       referenceImageUrl: referenceImageUrl.trim() || null,
@@ -281,6 +288,7 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
     setChildAge('4-6');
     setLanguage('English');
     setTheme('bedtime');
+    setCustomTheme('');
     setArtStyle('');
     setPageCount(6);
     setReferenceImageUrl('');
@@ -296,8 +304,8 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
     <section className="panel create-panel">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Create</p>
-          <h2>Make a story</h2>
+          <p className="eyebrow">Step 1: Setup</p>
+          <h2>Set the book</h2>
         </div>
         <span className="status-pill">{selectedStoryModel?.type === 'local' ? 'Demo mode' : 'API mode'}</span>
       </div>
@@ -306,7 +314,7 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
         <section className="simple-section character-section" aria-label="Characters">
           <div className="subsection-heading">
             <div>
-              <h3>Set the book</h3>
+              <h3>Characters</h3>
               <p>Add characters, references, page count, theme, and illustration direction.</p>
             </div>
             <button
@@ -482,6 +490,19 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
             </div>
 
             <div>
+              <label htmlFor="customTheme">Custom theme (optional)</label>
+              <input
+                id="customTheme"
+                type="text"
+                value={customTheme}
+                onChange={(event) => setCustomTheme(event.target.value)}
+                placeholder="Dinosaurs, first day at school, sharing toys..."
+              />
+            </div>
+          </div>
+
+          <div className="field-row">
+            <div>
               <label htmlFor="artStyle">Art style (optional)</label>
               <input
                 id="artStyle"
@@ -571,8 +592,18 @@ function PromptForm({ onGenerate, loading, modelSettings, characterToUse, onDraf
         </section>
 
         <div className="form-actions">
+          {loading && (
+            <button
+              type="button"
+              className="stop-button"
+              onClick={onStop}
+              disabled={processState?.stage === 'stopping'}
+            >
+              {processState?.stage === 'stopping' ? 'Stopping...' : 'Stop'}
+            </button>
+          )}
           <button type="submit" disabled={loading || !prompt.trim()}>
-            {loading ? 'Generating story...' : 'Generate story'}
+            {submitLabel}
           </button>
           <button type="button" className="secondary-button" onClick={handleUseSample}>
             Reset sample

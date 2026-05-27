@@ -10,18 +10,19 @@ export function normalizeStoryHistory(value) {
 }
 
 export function addStoryToHistory(history, book, request) {
+  const setupRequest = request || book?.savedSetupSnapshot || book?.requestSnapshot || null;
   const entry = normalizeHistoryEntry({
     id: book?.id || `history-${Date.now()}`,
     createdAt: book?.createdAt || new Date().toISOString(),
     title: book?.storyTitle || 'Untitled story',
     summary: book?.storySummary || '',
-    pageCount: Array.isArray(book?.pages) ? book.pages.length : request?.pageCount || 0,
-    language: book?.language || request?.language || 'English',
-    theme: book?.theme || request?.theme || '',
+    pageCount: Array.isArray(book?.pages) ? book.pages.length : setupRequest?.pageCount || 0,
+    language: book?.language || setupRequest?.language || 'English',
+    theme: book?.theme || setupRequest?.theme || '',
     storyModel: book?.storyModel || '',
     imageModel: book?.imageModel || '',
     book,
-    request,
+    request: setupRequest,
   });
   const current = normalizeStoryHistory(history);
   const withoutDuplicate = current.filter((item) => item.id !== entry.id);
@@ -31,14 +32,18 @@ export function addStoryToHistory(history, book, request) {
 
 export async function createHistoryRequestSnapshot(request) {
   const characterSnapshots = await Promise.all(
-    (request.characters || []).map(async (character) => ({
-      name: character.name || '',
-      role: character.role || '',
-      description: character.description || '',
-      referenceImageUrl: character.referenceImageUrl
-        || (character.referenceImageFile ? await readFileAsDataUrl(character.referenceImageFile) : null),
-      referenceImageFile: null,
-    })),
+    (request.characters || []).map(async (character) => {
+      const safeCharacter = character && typeof character === 'object' ? character : {};
+
+      return {
+        name: safeCharacter.name || '',
+        role: safeCharacter.role || '',
+        description: safeCharacter.description || '',
+        referenceImageUrl: safeCharacter.referenceImageUrl
+          || (safeCharacter.referenceImageFile ? await readFileAsDataUrl(safeCharacter.referenceImageFile) : null),
+        referenceImageFile: null,
+      };
+    }),
   );
 
   return {
@@ -51,20 +56,21 @@ export async function createHistoryRequestSnapshot(request) {
 }
 
 function normalizeHistoryEntry(entry = {}) {
-  const book = entry.book && typeof entry.book === 'object' ? entry.book : null;
-  const request = normalizeHistoryRequest(entry.request);
-  const createdAt = entry.createdAt || book?.createdAt || new Date().toISOString();
+  const safeEntry = entry && typeof entry === 'object' ? entry : {};
+  const book = safeEntry.book && typeof safeEntry.book === 'object' ? safeEntry.book : null;
+  const request = normalizeHistoryRequest(safeEntry.request);
+  const createdAt = safeEntry.createdAt || book?.createdAt || new Date().toISOString();
 
   return {
-    id: entry.id || book?.id || `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: safeEntry.id || book?.id || `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     createdAt,
-    title: String(entry.title || book?.storyTitle || 'Untitled story'),
-    summary: String(entry.summary || book?.storySummary || ''),
-    pageCount: Number(entry.pageCount || book?.pages?.length || request?.pageCount || 0),
-    language: String(entry.language || book?.language || request?.language || 'English'),
-    theme: String(entry.theme || book?.theme || request?.theme || ''),
-    storyModel: String(entry.storyModel || book?.storyModel || ''),
-    imageModel: String(entry.imageModel || book?.imageModel || ''),
+    title: String(safeEntry.title || book?.storyTitle || 'Untitled story'),
+    summary: String(safeEntry.summary || book?.storySummary || ''),
+    pageCount: Number(safeEntry.pageCount || book?.pages?.length || request?.pageCount || 0),
+    language: String(safeEntry.language || book?.language || request?.language || 'English'),
+    theme: String(safeEntry.theme || book?.theme || request?.theme || ''),
+    storyModel: String(safeEntry.storyModel || book?.storyModel || ''),
+    imageModel: String(safeEntry.imageModel || book?.imageModel || ''),
     book,
     request,
   };
@@ -82,16 +88,22 @@ function normalizeHistoryRequest(request = {}) {
     language: String(request.language || 'English'),
     childAge: String(request.childAge || '4-6'),
     theme: String(request.theme || 'bedtime'),
+    themePreset: String(request.themePreset || request.theme || 'bedtime'),
+    customTheme: String(request.customTheme || ''),
     artStyle: String(request.artStyle || ''),
     pageCount: Number(request.pageCount || 6),
     characters: Array.isArray(request.characters)
-      ? request.characters.map((character, index) => ({
-        name: String(character.name || ''),
-        role: String(character.role || (index === 0 ? 'main character' : 'supporting character')),
-        description: String(character.description || ''),
-        referenceImageUrl: character.referenceImageUrl || null,
-        referenceImageFile: null,
-      }))
+      ? request.characters.map((character, index) => {
+        const safeCharacter = character && typeof character === 'object' ? character : {};
+
+        return {
+          name: String(safeCharacter.name || ''),
+          role: String(safeCharacter.role || (index === 0 ? 'main character' : 'supporting character')),
+          description: String(safeCharacter.description || ''),
+          referenceImageUrl: safeCharacter.referenceImageUrl || null,
+          referenceImageFile: null,
+        };
+      })
       : [],
     referenceImageUrl: request.referenceImageUrl || null,
     referenceImageFile: null,

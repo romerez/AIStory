@@ -76,10 +76,31 @@ function StoryHistory({ history, onOpenStory, onRecreateStory, onRemoveStory, on
                       <p>{entry.summary || entry.request.prompt}</p>
                       <div className="book-meta">
                         <span>{entry.pageCount} pages</span>
+                        <span>{formatHistoryStatus(entry.book)}</span>
                         <span>{entry.language || 'English'}</span>
                         {entry.theme && <span>{entry.theme}</span>}
                         {entry.storyModel && <span>{entry.storyModel}</span>}
                       </div>
+                      <details className="history-setup-details">
+                        <summary>Saved setup</summary>
+                        <dl>
+                          <div>
+                            <dt>Story idea</dt>
+                            <dd>{entry.request.prompt || 'No story idea saved'}</dd>
+                          </div>
+                          <div>
+                            <dt>Book details</dt>
+                            <dd>
+                              {entry.request.language || 'English'} · Ages {entry.request.childAge || '4-6'} · {entry.request.pageCount || entry.pageCount} pages · {entry.request.theme || 'bedtime'}
+                              {entry.request.artStyle ? ` · ${entry.request.artStyle}` : ''}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Characters</dt>
+                            <dd>{formatCharacters(entry.request.characters)}</dd>
+                          </div>
+                        </dl>
+                      </details>
                     </div>
                     <div className="history-actions">
                       <button type="button" className="use-model-button active" onClick={() => onOpenStory(entry.book)}>
@@ -108,12 +129,45 @@ function formatDate(value) {
     return 'Saved story';
   }
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Saved story';
+  }
+
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function formatHistoryStatus(book) {
+  const pages = Array.isArray(book?.pages) ? book.pages : [];
+  const completeImages = pages.filter((page) => page.imageStatus === 'complete').length;
+
+  if (book?.workflowStage === 'complete') {
+    return 'Complete book';
+  }
+
+  if (book?.workflowStage === 'image-building') {
+    return `${completeImages}/${pages.length || 0} images`;
+  }
+
+  return 'Story draft';
+}
+
+function formatCharacters(characters = []) {
+  const names = characters
+    .map((character) => character?.name)
+    .filter(Boolean);
+
+  if (names.length === 0) {
+    return 'No characters saved';
+  }
+
+  return names.join(', ');
 }
 
 export default StoryHistory;

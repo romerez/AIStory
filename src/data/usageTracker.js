@@ -2,35 +2,44 @@ export function normalizeUsageStats(value) {
   const list = Array.isArray(value) ? value : [];
 
   return list
-    .map((item) => ({
-      id: String(item.id || ''),
-      kind: item.kind === 'image' ? 'image' : 'story',
-      provider: String(item.provider || ''),
-      modelId: String(item.modelId || ''),
-      modelLabel: String(item.modelLabel || ''),
-      modelName: String(item.modelName || ''),
-      keyLabel: String(item.keyLabel || 'No key'),
-      keyId: String(item.keyId || 'no-key'),
-      storyRuns: Number(item.storyRuns || 0),
-      imageRuns: Number(item.imageRuns || 0),
-      generatedPages: Number(item.generatedPages || 0),
-      regeneratedImages: Number(item.regeneratedImages || 0),
-      estimatedInputTokens: Number(item.estimatedInputTokens || 0),
-      estimatedOutputTokens: Number(item.estimatedOutputTokens || 0),
-      lastUsedAt: item.lastUsedAt || '',
-    }))
+    .map((item) => {
+      const safeItem = item && typeof item === 'object' ? item : {};
+
+      return {
+        id: String(safeItem.id || ''),
+        kind: safeItem.kind === 'image' ? 'image' : 'story',
+        provider: String(safeItem.provider || ''),
+        modelId: String(safeItem.modelId || ''),
+        modelLabel: String(safeItem.modelLabel || ''),
+        modelName: String(safeItem.modelName || ''),
+        keyLabel: String(safeItem.keyLabel || 'No key'),
+        keyId: String(safeItem.keyId || 'no-key'),
+        storyRuns: Number(safeItem.storyRuns || 0),
+        imageRuns: Number(safeItem.imageRuns || 0),
+        generatedPages: Number(safeItem.generatedPages || 0),
+        regeneratedImages: Number(safeItem.regeneratedImages || 0),
+        estimatedInputTokens: Number(safeItem.estimatedInputTokens || 0),
+        estimatedOutputTokens: Number(safeItem.estimatedOutputTokens || 0),
+        lastUsedAt: safeItem.lastUsedAt || '',
+      };
+    })
     .filter((item) => item.id);
 }
 
 export function recordBookGeneration(currentStats, request, book, modelSettings) {
+  return recordBookImageGeneration(
+    recordStoryDraftGeneration(currentStats, request, book, modelSettings),
+    request,
+    book,
+    modelSettings,
+  );
+}
+
+export function recordStoryDraftGeneration(currentStats, request, book, modelSettings) {
   const storyModel = findProfile(
     modelSettings.storyModels,
     request.storyModelId || modelSettings.activeStoryModelId,
   ) || modelSettings.storyModels[0];
-  const imageModel = findProfile(
-    modelSettings.imageModels,
-    request.imageModelId || modelSettings.activeImageModelId,
-  ) || modelSettings.imageModels[0];
   const pages = Array.isArray(book?.pages) ? book.pages : [];
   const generatedPages = pages.length || Number(request.pageCount || 0);
   const storyInputText = [
@@ -47,19 +56,26 @@ export function recordBookGeneration(currentStats, request, book, modelSettings)
     ...pages.map((page) => page.text || ''),
   ].join('\n');
 
-  let nextStats = upsertUsage(currentStats, storyModel, 'story', {
+  return upsertUsage(currentStats, storyModel, 'story', {
     storyRuns: 1,
     generatedPages,
     estimatedInputTokens: estimateTokens(storyInputText) + 180,
     estimatedOutputTokens: estimateTokens(storyOutputText),
   });
+}
 
-  nextStats = upsertUsage(nextStats, imageModel, 'image', {
+export function recordBookImageGeneration(currentStats, request, book, modelSettings) {
+  const imageModel = findProfile(
+    modelSettings.imageModels,
+    request.imageModelId || modelSettings.activeImageModelId,
+  ) || modelSettings.imageModels[0];
+  const pages = Array.isArray(book?.pages) ? book.pages : [];
+  const generatedPages = pages.length || Number(request.pageCount || 0);
+
+  return upsertUsage(currentStats, imageModel, 'image', {
     imageRuns: generatedPages,
     generatedPages,
   });
-
-  return nextStats;
 }
 
 export function recordImageRegeneration(currentStats, book, modelSettings) {
@@ -165,7 +181,7 @@ function upsertUsage(currentStats, profile, kind, increments) {
 }
 
 function findProfile(profiles, id) {
-  return profiles.find((profile) => profile.id === id);
+  return (profiles || []).find((profile) => profile?.id === id);
 }
 
 function getProfileLabel(profile) {
