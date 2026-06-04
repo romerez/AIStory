@@ -60,12 +60,13 @@ They do not primarily care about provider settings, model names, seeds, or image
 - Page-by-page preview.
 - Clear current story with confirmation.
 - Story history for the last 10 generated books, with open and recreate actions.
-- Persistent latest-book and history storage that can handle generated image data without browser quota crashes.
+- Persistent Step 1 setup draft, latest-book, and history storage that can handle generated image data without browser quota crashes.
 - Export as printable browser view and JSON download.
 - Usage dialog with local estimated activity by model and API key.
 - Stop controls for active story or image requests.
 - Loading, empty, and error states.
 - Guided step navigation that allows going back to earlier steps without losing entered setup or review state.
+- Visible Save setup action plus setup autosave so characters, references, book details, custom theme, art style, page count, and story idea survive reloads before story generation.
 
 ### Should Have
 
@@ -285,8 +286,10 @@ Built-in story API models should include:
 
 - OpenAI GPT-5.5, GPT-5.4, GPT-5.4 mini, GPT-5.4 nano, and GPT-5.2.
 - Anthropic Claude Opus 4.7, Claude Sonnet 4.6, and Claude Haiku 4.5.
-- Google Gemini 3.5 Flash, Gemini 3.1 Pro, Gemini 3.1 Flash-Lite, Gemini 2.5 Pro, Gemini 2.5 Flash, and Gemini 2.5 Flash-Lite.
+- Google Gemini 2.5 Pro, Gemini 2.5 Flash, and Gemini 2.5 Flash-Lite.
 - xAI Grok 4.3.
+
+Gemini story generation should not rely only on static model names. If a selected Gemini profile is unavailable for `v1beta`/`generateContent`, call Google's `models.list`, choose an available model that supports `generateContent`, and retry with Gemini 2.5 Flash as the preferred fallback.
 
 Built-in image API models should include:
 

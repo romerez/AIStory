@@ -1,4 +1,4 @@
-import { normalizeStoryHistory } from './storyHistory';
+import { normalizeHistoryRequest, normalizeStoryHistory } from './storyHistory';
 
 export const PERSISTENCE_DB_NAME = 'aistory-persistence';
 
@@ -6,6 +6,7 @@ const PERSISTENCE_DB_VERSION = 1;
 const STORE_NAME = 'kv';
 const latestBookKey = 'latest-book';
 const storyHistoryKey = 'story-history';
+const setupDraftKey = 'setup-draft';
 
 export async function loadLatestBook() {
   const storedBook = await getStoredValue(latestBookKey);
@@ -46,6 +47,33 @@ export async function loadPersistentStoryHistory() {
 export async function savePersistentStoryHistory(history) {
   await setStoredValue(storyHistoryKey, normalizeStoryHistory(history));
   removeLegacyStorageKey(localStorage, 'aistory-story-history');
+}
+
+export async function loadSetupDraft() {
+  const storedDraft = await getStoredValue(setupDraftKey);
+
+  if (storedDraft) {
+    return normalizeHistoryRequest(storedDraft);
+  }
+
+  return normalizeHistoryRequest(loadLegacyJsonFromStorage(localStorage, 'aistory-setup-draft', null));
+}
+
+export async function saveSetupDraft(setupDraft) {
+  const normalizedDraft = normalizeHistoryRequest(setupDraft);
+
+  if (!normalizedDraft) {
+    await clearSetupDraft();
+    return;
+  }
+
+  await setStoredValue(setupDraftKey, normalizedDraft);
+  removeLegacyStorageKey(localStorage, 'aistory-setup-draft');
+}
+
+export async function clearSetupDraft() {
+  await deleteStoredValue(setupDraftKey);
+  removeLegacyStorageKey(localStorage, 'aistory-setup-draft');
 }
 
 export function deletePersistenceDatabase() {
@@ -95,6 +123,15 @@ async function setStoredValue(key, value) {
 
 async function deleteStoredValue(key) {
   if (!hasIndexedDb()) {
+    const fallbackKey = getFallbackStorageKey(key);
+
+    if (fallbackKey) {
+      try {
+        getFallbackStorage(key).removeItem(fallbackKey);
+      } catch {
+        // Browser storage can be blocked; clearing is best effort.
+      }
+    }
     return;
   }
 
@@ -170,8 +207,30 @@ function removeLegacyStorageKey(storage, key) {
 }
 
 function setFallbackStorageValue(key, value) {
-  const storage = key === latestBookKey ? sessionStorage : localStorage;
-  const fallbackKey = key === latestBookKey ? 'aistory-latest-book' : 'aistory-story-history';
+  const storage = getFallbackStorage(key);
+  const fallbackKey = getFallbackStorageKey(key);
 
-  storage.setItem(fallbackKey, JSON.stringify(value));
+  if (fallbackKey) {
+    storage.setItem(fallbackKey, JSON.stringify(value));
+  }
+}
+
+function getFallbackStorage(key) {
+  return key === latestBookKey ? sessionStorage : localStorage;
+}
+
+function getFallbackStorageKey(key) {
+  if (key === latestBookKey) {
+    return 'aistory-latest-book';
+  }
+
+  if (key === storyHistoryKey) {
+    return 'aistory-story-history';
+  }
+
+  if (key === setupDraftKey) {
+    return 'aistory-setup-draft';
+  }
+
+  return '';
 }

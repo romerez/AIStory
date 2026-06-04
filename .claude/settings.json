@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm run build 2>&1)",
+      "PowerShell($errs=$null;$null=[System.Management.Automation.Language.Parser]::ParseFile\\(\"e:\\\\Dev\\\\AIStory\\\\scripts\\\\download-models.ps1\",[ref]$null,[ref]$errs\\); if\\($errs\\){\"SYNTAX ERRORS:\"; $errs|ForEach-Object{$_.Message}} else {\"download-models.ps1: no syntax errors\"})",
+      "Bash(node -e \"const fs=require\\('fs'\\);const w=JSON.parse\\(fs.readFileSync\\('local-stack/image-proxy/workflows/sdxl-ipadapter-storybook-hires.json','utf8'\\)\\);const t=w.template;console.log\\('hires JSON valid. nodes:',Object.keys\\(t\\).length,'| SaveImage<-',t['9'].inputs.images[0],'| upscaler',t['16'].inputs.model_name,'| 15',t['15'].class_type,'| 17',t['17'].class_type,'scale_by',t['17'].inputs.scale_by\\);\")",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File \"e:\\\\Dev\\\\AIStory\\\\stop-aistory.ps1\")"
+    ]
+  }
+}

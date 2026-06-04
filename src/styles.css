@@ -1422,6 +1422,50 @@ input[type='range'] {
   font-weight: 800;
 }
 
+.progress-indeterminate {
+  position: relative;
+  width: min(360px, 100%);
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+}
+
+.progress-indeterminate::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -45%;
+  width: 45%;
+  border-radius: 999px;
+  background: var(--primary);
+  animation: progress-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0% {
+    left: -45%;
+  }
+
+  100% {
+    left: 100%;
+  }
+}
+
+.empty-preview-progress {
+  justify-items: center;
+  margin-top: 16px;
+}
+
+.live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+
 .loader-small {
   width: 28px;
   min-width: 28px;
@@ -1581,7 +1625,15 @@ input[type='range'] {
   background: var(--surface-soft);
 }
 
-.page-stage img,
+.page-stage img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Contain (not cover) during review so faces and edges are never cropped while
+     judging cross-page consistency. */
+  object-fit: contain;
+}
+
 .page-card img {
   display: block;
   width: 100%;
@@ -1786,6 +1838,9 @@ input[type='range'] {
 
 .a4-copy p {
   margin: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   font-size: 24px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -1815,6 +1870,116 @@ input[type='range'] {
 .bible-panel p {
   margin: 0;
   color: var(--muted);
+}
+
+.character-sheet-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.character-sheet-preview {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  aspect-ratio: 16 / 9;
+}
+
+.character-sheet-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.character-sheet-meta {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+}
+
+.character-sheet-meta strong {
+  font-size: 15px;
+}
+
+.character-sheet-meta span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.character-sheet-meta button {
+  justify-self: start;
+}
+
+@media (max-width: 680px) {
+  .character-sheet-block {
+    grid-template-columns: 1fr;
+  }
+}
+
+.local-image-status {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.local-image-status > div {
+  display: grid;
+  gap: 4px;
+}
+
+.local-image-status span:last-child {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex: 0 0 auto;
+  background: #9aa3a8;
+}
+
+.status-dot-online {
+  background: #36b37e;
+  box-shadow: 0 0 0 3px rgba(54, 179, 126, 0.2);
+}
+
+.status-dot-offline {
+  background: #e5604d;
+  box-shadow: 0 0 0 3px rgba(229, 96, 77, 0.2);
+}
+
+.status-dot-pending {
+  background: #e1b45d;
+}
+
+.seed-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seed-control label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.seed-control input {
+  width: 130px;
 }
 
 .swatch-row {
@@ -2089,12 +2254,60 @@ summary {
   }
 }
 
+.prompt-style-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.prompt-style-picker label {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.prompt-style-picker select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+}
+
+.prompt-style-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.prompt-style-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.prompt-style-toggle input {
+  margin-top: 2px;
+}
+
 @page {
   size: A4 landscape;
   margin: 8mm;
 }
 
 @media print {
+  /* Browsers drop background colors from printouts by default. Force the
+     storybook's page tint and image frames to render so the saved PDF matches
+     the on-screen book. */
+  .print-book-pages,
+  .print-book-pages * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   body {
     background: #ffffff;
   }

@@ -7,6 +7,7 @@ const recoverableStorageKeys = [
   'aistory-character-library',
   'aistory-model-usage',
   'aistory-story-history',
+  'aistory-setup-draft',
   'aistory-ui-mode',
 ];
 

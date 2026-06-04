@@ -33,7 +33,7 @@ const PORT = Number(process.env.IMAGE_PROXY_PORT || 8989);
 const COMFY_URL = process.env.COMFY_URL || 'http://127.0.0.1:8188';
 const POLL_INTERVAL_MS = 750;
 const POLL_TIMEOUT_MS = 1000 * 60 * 5; // 5 minutes per page
-const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4MB inbound (prompt only, no images yet)
+const MAX_BODY_BYTES = 24 * 1024 * 1024; // 24MB inbound (prompt + base64 reference images)
 
 const WORKFLOWS_DIR = path.join(__dirname, 'workflows');
 const DEFAULT_NEGATIVE = [
@@ -62,7 +62,8 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/health') {
       const comfyOk = await isComfyAlive();
       const workflows = await listWorkflows();
-      sendJson(res, 200, { ok: true, comfy: comfyOk, comfyUrl: COMFY_URL, workflows });
+      const ipadapter = comfyOk ? await isIpAdapterInstalled() : false;
+      sendJson(res, 200, { ok: true, comfy: comfyOk, comfyUrl: COMFY_URL, workflows, ipadapter });
       return;
     }
 
@@ -82,6 +83,7 @@ const server = createServer(async (req, res) => {
         width: numberOr(body.width, 0),
         height: numberOr(body.height, 0),
         seed: numberOr(body.seed, 0),
+        referenceImages: Array.isArray(body.reference_images) ? body.reference_images : [],
       });
 
       sendJson(res, 200, {
@@ -114,17 +116,34 @@ server.listen(PORT, '127.0.0.1', () => {
 
 // ---------- Generation pipeline ----------
 
-async function generateImage({ prompt, modelName, negativePrompt, width, height, seed }) {
+async function generateImage({ prompt, modelName, negativePrompt, width, height, seed, referenceImages = [] }) {
   const t0 = Date.now();
-  const workflow = await loadWorkflowTemplate(modelName);
+  let workflow = await loadWorkflowTemplate(modelName);
+  let templateString = JSON.stringify(workflow.template);
+
+  // Upload reference images to ComfyUI (best effort) and resolve their filenames.
+  const refNames = await uploadReferenceImages(referenceImages);
+
+  // If the chosen workflow needs reference images but none are usable (none sent,
+  // or every upload failed), fall back to plain text-to-image SDXL so the page
+  // still renders instead of erroring on an empty LoadImage.
+  if (templateString.includes('${REF_IMAGE_1}') && refNames.length === 0) {
+    workflow = await loadWorkflowTemplate('sdxl-storybook');
+    templateString = JSON.stringify(workflow.template);
+  }
+
+  const ref1 = refNames[0] || '';
+  const ref2 = refNames[1] || refNames[0] || '';
 
   const filledWorkflow = JSON.parse(
-    JSON.stringify(workflow.template)
+    templateString
       .replaceAll('${PROMPT}', escapeJsonString(prompt))
       .replaceAll('${NEGATIVE_PROMPT}', escapeJsonString(negativePrompt))
       .replaceAll('${SEED}', String(seed || Math.floor(Math.random() * 2 ** 31)))
       .replaceAll('${WIDTH}', String(width || workflow.defaultWidth || 1216))
-      .replaceAll('${HEIGHT}', String(height || workflow.defaultHeight || 832)),
+      .replaceAll('${HEIGHT}', String(height || workflow.defaultHeight || 832))
+      .replaceAll('${REF_IMAGE_1}', escapeJsonString(ref1))
+      .replaceAll('${REF_IMAGE_2}', escapeJsonString(ref2)),
   );
 
   const submission = await postComfy('/prompt', { prompt: filledWorkflow });
@@ -187,6 +206,67 @@ async function listWorkflows() {
 }
 
 // ---------- ComfyUI client helpers ----------
+
+async function uploadReferenceImages(referenceImages) {
+  const names = [];
+
+  for (let index = 0; index < referenceImages.length; index += 1) {
+    const reference = referenceImages[index];
+    const data = typeof reference?.data === 'string' ? reference.data : '';
+
+    if (!data) {
+      continue;
+    }
+
+    const filename = `aistory_ref_${Date.now()}_${index}.${mimeToExt(reference?.mimeType)}`;
+
+    try {
+      const name = await uploadComfyImage(data, filename, reference?.mimeType || 'image/png');
+      if (name) {
+        names.push(name);
+      }
+    } catch (error) {
+      // Best effort: a failed upload just means fewer references; generateImage
+      // falls back to text-to-image when a ref workflow ends up with none.
+      console.error('[image-proxy] reference upload failed:', error.message);
+    }
+  }
+
+  return names;
+}
+
+async function uploadComfyImage(base64Data, filename, mimeType) {
+  const buffer = Buffer.from(base64Data, 'base64');
+  const form = new FormData();
+
+  form.append('image', new Blob([buffer], { type: mimeType }), filename);
+  form.append('overwrite', 'true');
+
+  const response = await fetch(`${COMFY_URL}/upload/image`, { method: 'POST', body: form });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`/upload/image ${response.status}: ${text.slice(0, 200)}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  // ComfyUI returns { name, subfolder, type }; LoadImage references "name" (or "subfolder/name").
+  return payload?.subfolder ? `${payload.subfolder}/${payload.name}` : payload?.name || filename;
+}
+
+function mimeToExt(mimeType) {
+  const value = String(mimeType || '').toLowerCase();
+
+  if (value.includes('jpeg') || value.includes('jpg')) {
+    return 'jpg';
+  }
+
+  if (value.includes('webp')) {
+    return 'webp';
+  }
+
+  return 'png';
+}
 
 async function postComfy(pathname, body) {
   const response = await fetch(`${COMFY_URL}${pathname}`, {
@@ -252,6 +332,21 @@ async function isComfyAlive() {
   try {
     const response = await fetch(`${COMFY_URL}/system_stats`, { signal: AbortSignal.timeout(2000) });
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function isIpAdapterInstalled() {
+  try {
+    const response = await fetch(`${COMFY_URL}/object_info/IPAdapterUnifiedLoader`, { signal: AbortSignal.timeout(2000) });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    return Boolean(data && data.IPAdapterUnifiedLoader);
   } catch {
     return false;
   }

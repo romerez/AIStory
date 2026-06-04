@@ -3,6 +3,12 @@ import { artStyleOptions, childAgeOptions, languageOptions, themeOptions } from 
 
 const samplePrompt = 'Write me a story about why it is important to go to sleep early.';
 const maxCharacters = 5;
+const defaultCharacter = {
+  id: 'character-sample-main',
+  name: 'Milo',
+  role: 'main character',
+  description: 'A curious child who asks one more question before bed',
+};
 
 function createCharacter(values = {}) {
   return {
@@ -17,15 +23,22 @@ function createCharacter(values = {}) {
   };
 }
 
-function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, characterToUse, onDraftChange }) {
+function PromptForm({
+  onGenerate,
+  onSaveSetup,
+  onStop,
+  loading,
+  processState,
+  modelSettings,
+  characterToUse,
+  initialDraft,
+  initialDraftVersion = 0,
+  setupSaveStatus,
+  onDraftChange,
+}) {
   const [prompt, setPrompt] = useState(samplePrompt);
   const [characters, setCharacters] = useState(() => [
-    createCharacter({
-      id: 'character-sample-main',
-      name: 'Milo',
-      role: 'main character',
-      description: 'A curious child who asks one more question before bed',
-    }),
+    createCharacter(defaultCharacter),
   ]);
   const [language, setLanguage] = useState('English');
   const [childAge, setChildAge] = useState('4-6');
@@ -40,6 +53,7 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
   const [characterDragId, setCharacterDragId] = useState('');
   const fileInputRef = useRef(null);
   const previewUrlsRef = useRef(new Set());
+  const appliedDraftVersionRef = useRef(null);
   const storyModelId = modelSettings.activeStoryModelId || modelSettings.storyModels[0]?.id || '';
   const imageModelId = modelSettings.activeImageModelId || modelSettings.imageModels[0]?.id || '';
   const selectedStoryModel = modelSettings.storyModels.find((model) => model.id === storyModelId)
@@ -48,8 +62,7 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
 
   useEffect(() => {
     return () => {
-      previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      previewUrlsRef.current.clear();
+      clearPreviewUrls();
     };
   }, []);
 
@@ -86,6 +99,15 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
       return [...current, nextCharacter];
     });
   }, [characterToUse]);
+
+  useEffect(() => {
+    if (!initialDraft || appliedDraftVersionRef.current === initialDraftVersion) {
+      return;
+    }
+
+    appliedDraftVersionRef.current = initialDraftVersion;
+    loadDraftIntoForm(initialDraft);
+  }, [initialDraft, initialDraftVersion]);
 
   const requestPreview = useMemo(() => buildRequest(), [
     artStyle,
@@ -131,6 +153,50 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
       referenceImageFile,
     };
   }
+
+  function loadDraftIntoForm(draft = {}) {
+    const safeDraft = draft && typeof draft === 'object' ? draft : {};
+    const savedCharacters = Array.isArray(safeDraft.characters) && safeDraft.characters.length > 0
+      ? safeDraft.characters
+      : [defaultCharacter];
+    const matchingThemePreset = themeOptions.find((option) => option.value === safeDraft.themePreset)
+      || themeOptions.find((option) => option.value === safeDraft.theme);
+    const themePreset = matchingThemePreset?.value || 'bedtime';
+    const customThemeValue = safeDraft.customTheme
+      || (matchingThemePreset ? '' : String(safeDraft.theme || ''));
+
+    clearPreviewUrls();
+    setPrompt(String(safeDraft.prompt || samplePrompt));
+    setCharacters(savedCharacters.slice(0, maxCharacters).map((character, index) => {
+      const safeCharacter = character && typeof character === 'object' ? character : {};
+
+      return createCharacter({
+        id: safeCharacter.id || `character-restored-${index}-${Date.now()}`,
+        name: String(safeCharacter.name || ''),
+        role: String(safeCharacter.role || (index === 0 ? 'main character' : 'supporting character')),
+        description: String(safeCharacter.description || ''),
+        referenceImageUrl: safeCharacter.referenceImageUrl || '',
+        referenceImageFile: null,
+        previewUrl: '',
+      });
+    }));
+    setLanguage(String(safeDraft.language || 'English'));
+    setChildAge(String(safeDraft.childAge || '4-6'));
+    setTheme(themePreset);
+    setCustomTheme(customThemeValue);
+    setArtStyle(String(safeDraft.artStyle || ''));
+    setPageCount(clampPageCount(safeDraft.pageCount));
+    setReferenceImageUrl(safeDraft.referenceImageUrl || '');
+    setReferenceImageFile(null);
+    setPreviewUrl('');
+    setDragActive(false);
+    setCharacterDragId('');
+  }
+
+  const clearPreviewUrls = () => {
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current.clear();
+  };
 
   const registerPreviewUrl = (file) => {
     const url = URL.createObjectURL(file);
@@ -270,20 +336,11 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
     });
   };
 
-  const resetCharacterPreviews = () => {
-    characters.forEach((character) => revokePreviewUrl(character.previewUrl));
-  };
-
   const handleUseSample = () => {
-    resetCharacterPreviews();
+    clearPreviewUrls();
     setPrompt(samplePrompt);
     setCharacters([
-      createCharacter({
-        id: 'character-sample-main',
-        name: 'Milo',
-        role: 'main character',
-        description: 'A curious child who asks one more question before bed',
-      }),
+      createCharacter(defaultCharacter),
     ]);
     setChildAge('4-6');
     setLanguage('English');
@@ -592,6 +649,7 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
         </section>
 
         <div className="form-actions">
+          {setupSaveStatus && <span className="settings-save-status">{setupSaveStatus}</span>}
           {loading && (
             <button
               type="button"
@@ -605,6 +663,14 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
           <button type="submit" disabled={loading || !prompt.trim()}>
             {submitLabel}
           </button>
+          <button
+            type="button"
+            className="icon-text-button"
+            onClick={() => onSaveSetup?.(buildRequest())}
+            disabled={loading}
+          >
+            Save setup
+          </button>
           <button type="button" className="secondary-button" onClick={handleUseSample}>
             Reset sample
           </button>
@@ -612,6 +678,16 @@ function PromptForm({ onGenerate, onStop, loading, processState, modelSettings, 
       </form>
     </section>
   );
+}
+
+function clampPageCount(value) {
+  const pageCount = Number(value || 6);
+
+  if (!Number.isFinite(pageCount)) {
+    return 6;
+  }
+
+  return Math.min(12, Math.max(2, Math.round(pageCount)));
 }
 
 export default PromptForm;

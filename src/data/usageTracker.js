@@ -38,7 +38,10 @@ export function recordBookGeneration(currentStats, request, book, modelSettings)
 export function recordStoryDraftGeneration(currentStats, request, book, modelSettings) {
   const storyModel = findProfile(
     modelSettings.storyModels,
-    request.storyModelId || modelSettings.activeStoryModelId,
+    request.storyModelId,
+  ) || findProfile(
+    modelSettings.storyModels,
+    modelSettings.activeStoryModelId,
   ) || modelSettings.storyModels[0];
   const pages = Array.isArray(book?.pages) ? book.pages : [];
   const generatedPages = pages.length || Number(request.pageCount || 0);
@@ -67,7 +70,10 @@ export function recordStoryDraftGeneration(currentStats, request, book, modelSet
 export function recordBookImageGeneration(currentStats, request, book, modelSettings) {
   const imageModel = findProfile(
     modelSettings.imageModels,
-    request.imageModelId || modelSettings.activeImageModelId,
+    request.imageModelId,
+  ) || findProfile(
+    modelSettings.imageModels,
+    modelSettings.activeImageModelId,
   ) || modelSettings.imageModels[0];
   const pages = Array.isArray(book?.pages) ? book.pages : [];
   const generatedPages = pages.length || Number(request.pageCount || 0);

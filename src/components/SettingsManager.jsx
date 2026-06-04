@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildPremadeStoryPrompt } from '../api/storyModelClient';
+import { getLocalImageHealth } from '../api/backendClient';
 import {
   createEmptyModelProfile,
   getProviderKeyId,
@@ -16,8 +17,11 @@ function SettingsManager({ modelSettings, currentDraftRequest, onSaveSettings, o
       return 'Start filling out the story form to preview the prompt.';
     }
 
-    return buildPremadeStoryPrompt(currentDraftRequest);
-  }, [currentDraftRequest]);
+    return buildPremadeStoryPrompt({
+      ...currentDraftRequest,
+      storyPromptStyle: localSettings.storyPromptStyle,
+    });
+  }, [currentDraftRequest, localSettings.storyPromptStyle]);
 
   useEffect(() => {
     setLocalSettings(modelSettings);
@@ -79,6 +83,18 @@ function SettingsManager({ modelSettings, currentDraftRequest, onSaveSettings, o
     saveSettingsWithoutClosing(nextSettings, activeKey === 'activeStoryModelId'
       ? 'Story model saved'
       : 'Image model saved');
+  };
+
+  const setPromptStyle = (style) => {
+    const nextSettings = { ...localSettings, storyPromptStyle: style };
+    setLocalSettings(nextSettings);
+    saveSettingsWithoutClosing(nextSettings, 'Story prompt style saved');
+  };
+
+  const setLockCharacterLooks = (enabled) => {
+    const nextSettings = { ...localSettings, lockCharacterLooks: enabled };
+    setLocalSettings(nextSettings);
+    saveSettingsWithoutClosing(nextSettings, enabled ? 'Character lock on' : 'Character lock off');
   };
 
   const handleSave = () => {
@@ -169,6 +185,35 @@ function SettingsManager({ modelSettings, currentDraftRequest, onSaveSettings, o
                 <p>This is the prompt the selected story writer receives from the current form.</p>
               </div>
             </div>
+            <div className="prompt-style-picker">
+              <label htmlFor="prompt-style">Prompt style</label>
+              <select
+                id="prompt-style"
+                value={localSettings.storyPromptStyle || 'classic'}
+                onChange={(event) => setPromptStyle(event.target.value)}
+              >
+                <option value="classic">Classic - literal, explicit lessons</option>
+                <option value="storyteller">Storyteller - more depth and story arc</option>
+                <option value="playful">Playful - funny and silly</option>
+                <option value="bedtime">Bedtime - calm and soothing</option>
+              </select>
+              <span className="prompt-style-hint">
+                {({
+                  classic: 'The original prompt: literal and format-first, with an explicit lesson.',
+                  storyteller: 'Literary depth: a real arc, sensory writing, no tacked-on morals.',
+                  playful: 'Funny and silly: bouncy rhythm, humor, and a read-along catchphrase.',
+                  bedtime: 'Calm and soothing: soft, low-tension, winds down toward sleep.',
+                }[localSettings.storyPromptStyle]) || 'The original prompt: literal and format-first.'}
+              </span>
+            </div>
+            <label className="prompt-style-toggle">
+              <input
+                type="checkbox"
+                checked={localSettings.lockCharacterLooks !== false}
+                onChange={(event) => setLockCharacterLooks(event.target.checked)}
+              />
+              <span>Lock character looks - pin each character's appearance and keep it identical on every page (applies to newly generated stories).</span>
+            </label>
             <div className="prompt-preview settings-prompt-preview">
               <pre>{premadePrompt}</pre>
             </div>
@@ -206,8 +251,86 @@ function SettingsManager({ modelSettings, currentDraftRequest, onSaveSettings, o
             onUpdate={updateProfile}
             onUseDefault={(id) => setActiveProfile('activeImageModelId', id)}
           />
+
+          <LocalImageStatus imageModels={localSettings.imageModels} />
         </div>
       </section>
+    </div>
+  );
+}
+
+function LocalImageStatus({ imageModels = [] }) {
+  const comfyModel = imageModels.find((model) => (
+    /comfyui/i.test(`${model.provider || ''} ${model.label || ''}`)
+    || String(model.endpoint || '').includes(':8989')
+  ));
+  const [status, setStatus] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const endpoint = comfyModel?.endpoint || '';
+
+  const check = async () => {
+    setChecking(true);
+    const result = await getLocalImageHealth(endpoint);
+    setStatus(result);
+    setChecking(false);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!endpoint) {
+      return undefined;
+    }
+
+    setChecking(true);
+    getLocalImageHealth(endpoint).then((result) => {
+      if (!cancelled) {
+        setStatus(result);
+        setChecking(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [endpoint]);
+
+  if (!comfyModel) {
+    return null;
+  }
+
+  const online = Boolean(status?.ok && status?.comfy);
+  const dotClass = checking ? 'pending' : online ? 'online' : 'offline';
+  const workflows = status?.workflows || [];
+
+  return (
+    <div className="settings-group">
+      <div className="subsection-heading">
+        <div>
+          <h3>Local image stack (ComfyUI)</h3>
+          <p>Status of the local image proxy and ComfyUI used by the ComfyUI presets.</p>
+        </div>
+        <button type="button" className="icon-text-button" onClick={check} disabled={checking}>
+          {checking ? 'Checking...' : 'Refresh'}
+        </button>
+      </div>
+      <div className="local-image-status">
+        <span className={`status-dot status-dot-${dotClass}`} aria-hidden="true" />
+        <div>
+          <strong>
+            {checking && 'Checking…'}
+            {!checking && online && 'ComfyUI connected'}
+            {!checking && status && !online && (status.proxy ? 'Proxy up — ComfyUI not responding' : 'Image proxy unreachable')}
+            {!checking && !status && 'Not checked yet'}
+          </strong>
+          <span>
+            {online
+              ? `Workflows: ${workflows.join(', ') || 'none'} · IP-Adapter: ${status.ipadapter ? 'installed' : 'missing'}`
+              : 'Run local-stack/start-all.ps1 to start ComfyUI + the image proxy on this PC.'}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -423,6 +546,15 @@ function getModelKeyStatus(profile, providerKeys) {
   }
 
   const keyId = getProviderKeyId(profile.provider);
+
+  if (keyId === 'local') {
+    // Local OpenAI-compatible servers (Ollama, LM Studio, ...) need no key.
+    return {
+      hasKey: true,
+      label: 'Local · no key',
+    };
+  }
+
   const keyLabel = getProviderKeyLabel(profile.provider);
   const hasKey = Boolean(String(providerKeys?.[keyId] || profile.apiKey || '').trim());
 

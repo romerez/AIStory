@@ -35,30 +35,48 @@ Run `local-stack\start-all.ps1`. It launches ComfyUI, the image proxy, and verif
 
 ## Model downloads
 
-ComfyUI looks for files in specific subfolders of `E:\AI\ComfyUI\models\`. See `MODELS.md` for direct download commands (PowerShell `Invoke-WebRequest` for each file).
+ComfyUI looks for files in specific subfolders of `E:\AI\ComfyUI\models\`. Run `scripts\download-models.ps1` from the repo root to fetch everything (resumable; skips files that already exist):
+
+- SDXL base → `models\checkpoints\`
+- FLUX.1 schnell + VAE + text encoders → `models\unet\`, `models\vae\`, `models\clip\`
+- IP-Adapter Plus SDXL + CLIP-ViT-H → `models\ipadapter\`, `models\clip_vision\`
+- RealESRGAN x4 (only needed for the `*-hires` workflows) → `models\upscale_models\`
+
+Skip groups with `-SkipSDXL`, `-SkipFlux`, `-SkipIPAdapter`, `-SkipUpscale`.
 
 ## Hebrew model
 
-Ollama supports pulling GGUFs straight from HuggingFace:
+Ollama pulls GGUFs straight from HuggingFace. DictaLM 3.0 (Hebrew-native, "thinking") is the built-in preset:
 
 ```powershell
-# DictaLM 2.0 instruct — purpose-built for Hebrew
-ollama pull hf.co/dicta-il/dictalm2.0-instruct-GGUF:Q5_K_M
+# DictaLM 3.0 24B Thinking — purpose-built for Hebrew
+ollama pull hf.co/dicta-il/DictaLM-3.0-24B-Thinking-GGUF:Q4_K_M
 
-# Or a strong general model if DictaLM is too narrow
+# Or a strong general model if you prefer
 ollama pull qwen2.5:14b-instruct-q5_K_M
 ```
 
-After pulling, configure AIStory's Settings → Story model with:
+AIStory ships a built-in story preset `DictaLM 3.0 24B (local)` pointing at this model — pick it in Settings → Story model and "Use for stories". To wire any other local model by hand:
 - Type: `openai-compatible`
 - Endpoint: `http://127.0.0.1:11434/v1/chat/completions`
-- Model name: `hf.co/dicta-il/dictalm2.0-instruct-GGUF:Q5_K_M` (whatever you pulled)
-- API key: leave empty (Ollama ignores it)
+- Model name: `hf.co/dicta-il/DictaLM-3.0-24B-Thinking-GGUF:Q4_K_M` (whatever you pulled)
+- API key: leave empty (Ollama ignores it; local endpoints omit the `Authorization` header automatically)
+
+DictaLM 3.0 is a "thinking" model — it emits reasoning that AIStory strips before parsing the story JSON.
 
 ## Image endpoint
 
-In AIStory Settings → Image model, edit the Multiplay slot (or add a new custom model):
-- Type: `custom-image`
-- Endpoint: `http://127.0.0.1:8989/v1/images/generations`
-- Model name: `sdxl-storybook` or `flux-storybook`
-- API key: leave empty
+AIStory ships built-in image presets that point at the local proxy — pick one in Settings → Image model (no manual setup, no API key):
+
+| Preset | Workflow | Notes |
+| --- | --- | --- |
+| ComfyUI FLUX schnell (fast) | `flux-storybook` | Fast text-to-image. |
+| ComfyUI SDXL | `sdxl-storybook` | SDXL base, negative prompt. |
+| ComfyUI SDXL Consistent | `sdxl-ipadapter-storybook` | SDXL + IP-Adapter; the character + background sheets are passed as identity/setting anchors for cross-page consistency. |
+| ComfyUI SDXL Consistent (Hi-Res) | `sdxl-ipadapter-storybook-hires` | Same graph, then RealESRGAN x4 + downscale (~1.5x) for sharper output. |
+
+Workflows live in `image-proxy/workflows/<name>.json`. The proxy substitutes `${PROMPT}`, `${NEGATIVE_PROMPT}`, `${SEED}`, `${WIDTH}`, `${HEIGHT}`, and (for IP-Adapter workflows) `${REF_IMAGE_1}`/`${REF_IMAGE_2}`, uploading reference images to ComfyUI first. If an IP-Adapter workflow gets no usable references, it falls back to plain `sdxl-storybook` text-to-image so the page still renders.
+
+To wire it by hand instead (e.g. the Multiplay slot): Type `custom-image`, Endpoint `http://127.0.0.1:8989/v1/images/generations`, Model name = a workflow name above, API key empty.
+
+`GET http://127.0.0.1:8989/health` reports `{ ok, comfy, workflows, ipadapter }`; AIStory's Settings surfaces this via the backend's `/api/local-image-health`.

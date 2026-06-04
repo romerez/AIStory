@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 import {
   generateImagesForBook,
   generateBookFromStoryModel,
+  generateCharacterSheetFromModel,
+  generateLocationSheetFromModel,
   regeneratePageTextFromModel,
   regeneratePageImageFromModel,
+  getStoryGenerationProgress,
 } from '../src/api/storyModelClient.js';
 import { mergeModelSettings } from '../src/data/providerConfig.js';
 
@@ -45,6 +48,17 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/local-image-health' && request.method === 'GET') {
+      const health = await checkLocalImageHealth(url.searchParams.get('endpoint') || '');
+      sendJson(response, 200, health);
+      return;
+    }
+
+    if (url.pathname === '/api/story-progress' && request.method === 'GET') {
+      sendJson(response, 200, await getStoryProgressStatus());
+      return;
+    }
+
     if (url.pathname === '/api/generate-story' && request.method === 'POST') {
       const body = await readJsonBody(request);
       const storyRequest = normalizeGenerateRequest(body.request || body);
@@ -67,6 +81,38 @@ const server = createServer(async (request, response) => {
 
       const modelSettings = resolveServerModelSettings(body.modelSettings);
       const book = await generateImagesForBook(body.book, modelSettings, {
+        signal: requestAbortController.signal,
+      });
+
+      sendJson(response, 200, { book });
+      return;
+    }
+
+    if (url.pathname === '/api/generate-character-sheet' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+
+      if (!body.book || typeof body.book !== 'object') {
+        throw createHttpError(400, 'A generated book is required.');
+      }
+
+      const modelSettings = resolveServerModelSettings(body.modelSettings);
+      const book = await generateCharacterSheetFromModel(body.book, modelSettings, {
+        signal: requestAbortController.signal,
+      });
+
+      sendJson(response, 200, { book });
+      return;
+    }
+
+    if (url.pathname === '/api/generate-location-sheet' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+
+      if (!body.book || typeof body.book !== 'object') {
+        throw createHttpError(400, 'A generated book is required.');
+      }
+
+      const modelSettings = resolveServerModelSettings(body.modelSettings);
+      const book = await generateLocationSheetFromModel(body.book, modelSettings, {
         signal: requestAbortController.signal,
       });
 
@@ -244,6 +290,73 @@ function getProviderEndpoint(profile = {}) {
   }
 
   return '';
+}
+
+async function getStoryProgressStatus() {
+  const progress = getStoryGenerationProgress() || {};
+  const now = Date.now();
+  let serverAlive = null;
+
+  if (progress.active && progress.baseUrl) {
+    serverAlive = await pingModelServer(progress.baseUrl);
+  }
+
+  const words = progress.words || 0;
+  const thinkingChars = progress.thinkingChars || 0;
+
+  return {
+    active: Boolean(progress.active),
+    phase: words > 0 ? 'writing' : (thinkingChars > 0 ? 'thinking' : 'warming'),
+    words,
+    chars: progress.chars || 0,
+    thinkingChars,
+    modelName: progress.modelName || '',
+    elapsedSeconds: progress.startedAt ? Math.round((now - progress.startedAt) / 1000) : null,
+    lastChunkSecondsAgo: progress.lastChunkAt ? Math.round((now - progress.lastChunkAt) / 1000) : null,
+    serverAlive,
+  };
+}
+
+async function pingModelServer(baseUrl) {
+  try {
+    const response = await fetch(`${baseUrl}/api/version`, { signal: AbortSignal.timeout(2500) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function checkLocalImageHealth(endpoint) {
+  const healthUrl = deriveProxyHealthUrl(endpoint);
+
+  try {
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(3000) });
+
+    if (!response.ok) {
+      return { ok: false, proxy: false, error: `Proxy returned ${response.status}.`, healthUrl };
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    return {
+      ok: true,
+      proxy: true,
+      comfy: Boolean(payload.comfy),
+      ipadapter: Boolean(payload.ipadapter),
+      workflows: Array.isArray(payload.workflows) ? payload.workflows : [],
+      healthUrl,
+    };
+  } catch (error) {
+    return { ok: false, proxy: false, error: String(error.message || 'unreachable'), healthUrl };
+  }
+}
+
+function deriveProxyHealthUrl(endpoint) {
+  try {
+    return `${new URL(endpoint).origin}/health`;
+  } catch {
+    return 'http://127.0.0.1:8989/health';
+  }
 }
 
 function getProviderKeyStatus() {

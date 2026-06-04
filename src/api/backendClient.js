@@ -1,6 +1,8 @@
 import {
   generateImagesForBook,
   generateBookFromStoryModel,
+  generateCharacterSheetFromModel,
+  generateLocationSheetFromModel,
   regeneratePageTextFromModel,
   regeneratePageImageFromModel,
   updateBookPageContent,
@@ -73,6 +75,48 @@ export async function generateBookImages(book, modelSettings, options = {}) {
   }
 }
 
+export async function generateCharacterSheet(book, modelSettings, options = {}) {
+  try {
+    const payload = await postJson('/api/generate-character-sheet', {
+      book: createBookForCharacterSheetRequest(book),
+      modelSettings,
+    }, options);
+
+    return mergeCharacterSheetIntoBook(book, payload.book || payload);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    if (isLocalImageBook(book, modelSettings)) {
+      return generateCharacterSheetFromModel(book, modelSettings);
+    }
+
+    throw addBackendHint(error);
+  }
+}
+
+export async function generateLocationSheet(book, modelSettings, options = {}) {
+  try {
+    const payload = await postJson('/api/generate-location-sheet', {
+      book: createBookForLocationSheetRequest(book),
+      modelSettings,
+    }, options);
+
+    return mergeLocationSheetIntoBook(book, payload.book || payload);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    if (isLocalImageBook(book, modelSettings)) {
+      return generateLocationSheetFromModel(book, modelSettings);
+    }
+
+    throw addBackendHint(error);
+  }
+}
+
 export async function regeneratePageImage(book, pageNumber, modelSettings, options = {}) {
   try {
     const payload = await postJson('/api/generate-image', {
@@ -115,6 +159,31 @@ export async function regeneratePageText(book, pageNumber, modelSettings, instru
     }
 
     throw addBackendHint(error);
+  }
+}
+
+export async function getLocalImageHealth(endpoint = '', options = {}) {
+  try {
+    const query = endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : '';
+    const response = await fetch(`${API_BASE}/api/local-image-health${query}`, {
+      signal: options.signal,
+    });
+
+    return await response.json();
+  } catch {
+    return { ok: false, proxy: false, error: 'AIStory API server is not reachable.' };
+  }
+}
+
+export async function getStoryProgress(options = {}) {
+  try {
+    const response = await fetch(`${API_BASE}/api/story-progress`, {
+      signal: options.signal,
+    });
+
+    return await response.json();
+  } catch {
+    return { active: false, reachable: false };
   }
 }
 
@@ -176,11 +245,17 @@ function readFileAsDataUrl(file) {
 function isLocalOnlyRequest(request, modelSettings) {
   const storyModel = findProfile(
     modelSettings.storyModels,
-    request.storyModelId || modelSettings.activeStoryModelId,
+    request.storyModelId,
+  ) || findProfile(
+    modelSettings.storyModels,
+    modelSettings.activeStoryModelId,
   ) || modelSettings.storyModels[0];
   const imageModel = findProfile(
     modelSettings.imageModels,
-    request.imageModelId || modelSettings.activeImageModelId,
+    request.imageModelId,
+  ) || findProfile(
+    modelSettings.imageModels,
+    modelSettings.activeImageModelId,
   ) || modelSettings.imageModels[0];
 
   return (!storyModel || storyModel.type === 'local') && (!imageModel || imageModel.type === 'local');
@@ -189,7 +264,10 @@ function isLocalOnlyRequest(request, modelSettings) {
 function isLocalStoryRequest(request, modelSettings) {
   const storyModel = findProfile(
     modelSettings.storyModels,
-    request.storyModelId || modelSettings.activeStoryModelId,
+    request.storyModelId,
+  ) || findProfile(
+    modelSettings.storyModels,
+    modelSettings.activeStoryModelId,
   ) || modelSettings.storyModels[0];
 
   return !storyModel || storyModel.type === 'local';
@@ -235,6 +313,60 @@ function createBookForTextRequest(book) {
       ...page,
       imageUrl: stripGeneratedImageUrl(page.imageUrl),
     })),
+  };
+}
+
+function createBookForCharacterSheetRequest(book) {
+  // The sheet only needs the visual bible, art style, and supplied references.
+  // Drop heavy generated page image data URLs so the request stays small.
+  return {
+    ...book,
+    characterSheetUrl: '',
+    pages: (book?.pages || []).map((page) => ({
+      ...page,
+      imageUrl: stripGeneratedImageUrl(page.imageUrl),
+    })),
+  };
+}
+
+function mergeCharacterSheetIntoBook(originalBook, responseBook) {
+  if (!responseBook || typeof responseBook !== 'object') {
+    return originalBook;
+  }
+
+  return {
+    ...originalBook,
+    imageModel: responseBook.imageModel || originalBook.imageModel,
+    characterSheetUrl: responseBook.characterSheetUrl || originalBook.characterSheetUrl || '',
+    characterSheetCreatedAt: responseBook.characterSheetCreatedAt
+      || originalBook.characterSheetCreatedAt
+      || '',
+  };
+}
+
+function createBookForLocationSheetRequest(book) {
+  return {
+    ...book,
+    locationSheetUrl: '',
+    pages: (book?.pages || []).map((page) => ({
+      ...page,
+      imageUrl: stripGeneratedImageUrl(page.imageUrl),
+    })),
+  };
+}
+
+function mergeLocationSheetIntoBook(originalBook, responseBook) {
+  if (!responseBook || typeof responseBook !== 'object') {
+    return originalBook;
+  }
+
+  return {
+    ...originalBook,
+    imageModel: responseBook.imageModel || originalBook.imageModel,
+    locationSheetUrl: responseBook.locationSheetUrl || originalBook.locationSheetUrl || '',
+    locationSheetCreatedAt: responseBook.locationSheetCreatedAt
+      || originalBook.locationSheetCreatedAt
+      || '',
   };
 }
 

@@ -28,14 +28,15 @@ The current MVP defaults to local demo mode, so you can test the full product lo
 - Preview and print landscape pages without UI image cropping.
 - In Steps mode, finish setup, review story text, then build images one stage at a time while keeping Back available.
 - If old browser data breaks the app, the recovery screen can reload or reset local AIStory data.
-- Generated books and history are stored in IndexedDB so image-heavy books do not crash `localStorage`/`sessionStorage`.
+- Generated books, history, and the current Step 1 setup draft are stored in IndexedDB so image-heavy books do not crash `localStorage`/`sessionStorage`.
 
 Gemini is the current default provider path: story text uses Google Gemini 2.5 Flash and images use Google Gemini 2.5 Flash Image unless the user chooses another model in Settings.
-Built-in story API models include current OpenAI GPT-5.5/GPT-5.4 options, Anthropic Claude Opus/Sonnet/Haiku options, Google Gemini 3.5/3.1/2.5 options, and xAI Grok 4.3.
+Built-in story API models include current OpenAI GPT-5.5/GPT-5.4 options, Anthropic Claude Opus/Sonnet/Haiku options, broadly available Google Gemini 2.5 options, and xAI Grok 4.3. If an older saved Gemini profile is unavailable, the backend checks Google's models list and falls back to a model that supports `generateContent`.
 Built-in image API models include OpenAI GPT Image 2/1.5/1/1 mini and Google Gemini Nano Banana image models: 3.1 Flash Image Preview, 3 Pro Image Preview, and 2.5 Flash Image. For local development, one browser-saved key per provider/company is used before server environment keys.
 External image prompts are sanitized before provider calls, and provider safety blocks retry once with a simpler wholesome storybook prompt.
 Character/background consistency is handled through a repeated visual bible and consistency-lock instructions in every image prompt. Prompts lock the same physical story stage, indoor/outdoor choice, landmarks, central props, and general layout unless the story explicitly moves. Prompts also ask for landscape-safe framing so important subjects are not cut off.
-When reference images are available, Gemini receives them as inline image inputs and OpenAI uses the image edits endpoint. The app uses character references first, then the style reference, then a compressed first completed page as a cast/location/layout/style anchor for later pages. Retrying images rebuilds the page prompts first so saved books use the latest continuity rules.
+Before page images, the app draws a character/style sheet and a background/location sheet once and pins them as the top identity and setting anchors for every page. When reference images are available, Gemini receives them as inline image inputs, OpenAI uses the image edits endpoint, and the local ComfyUI "consistent" presets feed the sheets to IP-Adapter. Per-page reference priority is the character sheet, then the background sheet, then character references, then the style reference; the legacy first-completed-page anchor is used only when no sheet exists. Retrying images rebuilds the page prompts first so saved books use the latest continuity rules.
+A zero-API-cost local stack is supported: ComfyUI behind a small OpenAI-shaped image proxy (FLUX schnell, SDXL, and SDXL + IP-Adapter "consistent" presets, with an optional hi-res RealESRGAN upscale) plus Ollama serving a local DictaLM 3.0 Hebrew story model. See `local-stack/README.md`.
 
 ## Project Artifacts
 
@@ -111,7 +112,7 @@ $env:GEMINI_API_KEY='...'
 ## Next Steps
 
 - Remove browser-saved provider keys once server-side key management is enough.
-- Add a dedicated character/style sheet step for stronger image consistency.
 - Add real provider usage/billing lookup.
 - Connect Multiplay image generation once the real endpoint contract is known.
-- Add a dedicated PDF renderer if browser print is not enough.
+- Add cover/end pages and richer final-book layouts.
+- Add a dedicated PDF library if the improved browser print path is not enough.

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  generateCharacterSheet,
+  generateLocationSheet,
   generateStoryDraft,
   regeneratePageImage,
   regeneratePageText,
@@ -17,8 +19,10 @@ import {
   clearLatestBook,
   loadLatestBook,
   loadPersistentStoryHistory,
+  loadSetupDraft,
   saveLatestBook,
   savePersistentStoryHistory,
+  saveSetupDraft,
 } from './data/persistentStorage';
 import { mergeModelSettings } from './data/providerConfig';
 import {
@@ -117,6 +121,8 @@ function App() {
   const [storyHistory, setStoryHistory] = useState([]);
   const [characterToUse, setCharacterToUse] = useState(null);
   const [currentDraftRequest, setCurrentDraftRequest] = useState(null);
+  const [initialSetupDraft, setInitialSetupDraft] = useState(null);
+  const [setupDraftVersion, setSetupDraftVersion] = useState(0);
   const [lastGeneratedRequest, setLastGeneratedRequest] = useState(null);
   const [processState, setProcessState] = useState(idleProcessState);
   const [error, setError] = useState('');
@@ -126,6 +132,7 @@ function App() {
   const [uiMode, setUiMode] = useState(loadUiMode);
   const [activeStep, setActiveStep] = useState('setup');
   const [storySaveStatus, setStorySaveStatus] = useState('');
+  const [setupSaveStatus, setSetupSaveStatus] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -133,12 +140,14 @@ function App() {
   const activeRequestControllerRef = useRef(null);
   const stopRequestedRef = useRef(false);
   const saveStatusTimerRef = useRef(null);
+  const setupSaveStatusTimerRef = useRef(null);
   const loading = processState.stage !== 'idle';
 
   useEffect(() => {
     return () => {
       activeRequestControllerRef.current?.abort();
       window.clearTimeout(saveStatusTimerRef.current);
+      window.clearTimeout(setupSaveStatusTimerRef.current);
     };
   }, []);
 
@@ -147,9 +156,10 @@ function App() {
 
     async function loadPersistentState() {
       try {
-        const [savedBook, savedHistory] = await Promise.all([
+        const [savedBook, savedHistory, savedSetupDraft] = await Promise.all([
           loadLatestBook(),
           loadPersistentStoryHistory(),
+          loadSetupDraft(),
         ]);
 
         if (cancelled) {
@@ -161,6 +171,8 @@ function App() {
           setLastGeneratedRequest(savedBook.requestSnapshot || null);
           setActiveStep(getStepForBook(savedBook));
         }
+
+        applyInitialSetupDraft(savedSetupDraft || savedBook?.requestSnapshot || null);
 
         if (savedHistory.length > 0) {
           setStoryHistory(savedHistory);
@@ -276,6 +288,43 @@ function App() {
     };
   }, [persistentStorageReady, storyHistory]);
 
+  useEffect(() => {
+    if (!persistentStorageReady || !currentDraftRequest) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const setupSnapshot = await createHistoryRequestSnapshot(currentDraftRequest);
+
+        if (!cancelled) {
+          await saveSetupDraft(setupSnapshot);
+        }
+      } catch (err) {
+        console.warn('AIStory could not save the setup draft.', err);
+        if (!cancelled) {
+          setStorageWarning('AIStory could not save the setup draft locally. Generate or use Save setup before refreshing.');
+        }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [currentDraftRequest, persistentStorageReady]);
+
+  const applyInitialSetupDraft = (setupDraft) => {
+    if (!setupDraft) {
+      return;
+    }
+
+    setCurrentDraftRequest(setupDraft);
+    setInitialSetupDraft(setupDraft);
+    setSetupDraftVersion((current) => current + 1);
+  };
+
   const rememberBookInHistory = (nextBook, requestOverride = null) => {
     const historyRequest = requestOverride
       || nextBook?.requestSnapshot
@@ -333,6 +382,26 @@ function App() {
     }, 1800);
   };
 
+  const showSetupSaveStatus = (message) => {
+    setSetupSaveStatus(message);
+    window.clearTimeout(setupSaveStatusTimerRef.current);
+    setupSaveStatusTimerRef.current = window.setTimeout(() => {
+      setSetupSaveStatus('');
+    }, 1800);
+  };
+
+  const handleSaveSetup = async (request) => {
+    try {
+      const setupSnapshot = await createHistoryRequestSnapshot(request || currentDraftRequest || {});
+
+      setCurrentDraftRequest(setupSnapshot);
+      await saveSetupDraft(setupSnapshot);
+      showSetupSaveStatus('Setup saved');
+    } catch (err) {
+      setError(err.message || 'Unable to save this setup.');
+    }
+  };
+
   const handleSaveStory = async () => {
     if (!book) {
       return;
@@ -378,12 +447,18 @@ function App() {
       const generatedBook = await generateStoryDraft(request, modelSettings, { signal: controller.signal });
       throwIfStopped(controller);
       const historyRequest = await createHistoryRequestSnapshot(request);
+      try {
+        await saveSetupDraft(historyRequest);
+      } catch (saveErr) {
+        console.warn('AIStory could not save the generated setup draft.', saveErr);
+      }
       const draftBook = {
         ...generatedBook,
         requestSnapshot: historyRequest,
         savedSetupSnapshot: historyRequest,
       };
 
+      setCurrentDraftRequest(historyRequest);
       setLastGeneratedRequest(historyRequest);
       setBook(draftBook);
       setStoryHistory((current) => addStoryToHistory(current, draftBook, historyRequest));
@@ -423,31 +498,40 @@ function App() {
     }
 
     const totalImages = pagesToGenerate.length;
-    const startedAt = Date.now();
     const initialBook = {
       ...sourceBook,
       workflowStage: 'image-building',
-      imagesStartedAt: new Date(startedAt).toISOString(),
+      imagesStartedAt: new Date().toISOString(),
+      // Ensure a stable base seed so per-page seeds are reproducible across retries.
+      imageSeed: sourceBook.imageSeed || Math.floor(Math.random() * 2 ** 31),
     };
-    let workingBook = await ensureGeneratedStyleReference(initialBook);
     const historyRequest = initialBook.requestSnapshot
       || sourceBook.requestSnapshot
       || lastGeneratedRequest
       || (currentDraftRequest ? await createHistoryRequestSnapshot(currentDraftRequest) : null);
+    let workingBook = initialBook;
 
-    setBook(workingBook);
-    if (historyRequest) {
-      setStoryHistory((current) => addStoryToHistory(current, workingBook, historyRequest));
-    }
+    const rememberWorkingBook = () => {
+      setBook(workingBook);
+      if (historyRequest) {
+        setStoryHistory((current) => addStoryToHistory(current, workingBook, historyRequest));
+      }
+    };
+
+    rememberWorkingBook();
     if (uiMode === 'guided') {
       setActiveStep('book');
     }
     setProcessState({
       stage: 'images',
-      message: `Building image 1 of ${totalImages}...`,
-      detail: restartAllImages
-        ? 'Restarting the whole picture set. The new first page becomes the fresh style anchor.'
-        : 'Starting the image queue. The estimate appears after the first picture finishes.',
+      message: workingBook.characterSheetUrl
+        ? `Building image 1 of ${totalImages}...`
+        : 'Preparing reference sheets...',
+      detail: workingBook.characterSheetUrl
+        ? (restartAllImages
+          ? 'Restarting the whole picture set using the saved cast and background sheets as anchors.'
+          : 'Starting the image queue. The estimate appears after the first picture finishes.')
+        : 'Drawing a reusable cast sheet and background sheet first so characters and setting stay consistent.',
       currentPage: pagesToGenerate[0]?.pageNumber || 1,
       completedImages: 0,
       totalImages,
@@ -455,7 +539,18 @@ function App() {
     });
     setError('');
 
+    let startedAt = Date.now();
+
     try {
+      workingBook = await ensureCharacterSheet(workingBook, modelSettings, { signal: controller.signal });
+      throwIfStopped(controller);
+      // Background/location sheet is intentionally skipped now: pages change scene
+      // like a TV episode, so a single fixed background sheet is neither used as a
+      // per-page anchor nor worth a (paid) image call. Identity comes from the cast sheet.
+      rememberWorkingBook();
+      workingBook = await ensureGeneratedStyleReference(workingBook);
+      startedAt = Date.now();
+
       for (const [index, page] of pagesToGenerate.entries()) {
         throwIfStopped(controller);
         const completedImages = index;
@@ -480,11 +575,32 @@ function App() {
           }),
         });
 
-        workingBook = await regeneratePageImage(workingBook, page.pageNumber, modelSettings, {
-          signal: controller.signal,
-        });
-        throwIfStopped(controller);
-        workingBook = await ensureGeneratedStyleReference(workingBook, page.pageNumber);
+        try {
+          workingBook = await regeneratePageImage(workingBook, page.pageNumber, modelSettings, {
+            signal: controller.signal,
+          });
+          throwIfStopped(controller);
+          workingBook = await ensureGeneratedStyleReference(workingBook, page.pageNumber);
+        } catch (pageError) {
+          if (isAbortError(pageError)) {
+            throw pageError;
+          }
+
+          // One stuck or rejected image must not dead-end the whole build: mark
+          // this page as failed and keep generating the rest. The user can then
+          // retry just this page (Try image again) or the remaining ones
+          // (Resume book images) without losing the pages that succeeded.
+          const message = String(pageError?.message || 'Image generation failed.').slice(0, 400);
+          workingBook = {
+            ...workingBook,
+            pages: (workingBook.pages || []).map((item) => (
+              item.pageNumber === page.pageNumber
+                ? { ...item, imageStatus: 'failed', imageError: message }
+                : item
+            )),
+          };
+        }
+
         workingBook = {
           ...workingBook,
           workflowStage: 'image-building',
@@ -561,6 +677,83 @@ function App() {
     } catch (err) {
       if (!isAbortError(err)) {
         setError(err.message || 'Unable to regenerate the image. Please try again.');
+      }
+    } finally {
+      finishAbortableRequest(controller);
+      setProcessState(idleProcessState);
+    }
+  };
+
+  const handleRegenerateCharacterSheet = async () => {
+    if (!book) {
+      return;
+    }
+
+    const controller = startAbortableRequest();
+    setProcessState({
+      stage: 'character-sheet',
+      message: 'Drawing a new character sheet...',
+      detail: 'Creating a fresh cast and style sheet. Use Retry all pictures afterwards to apply it to every page.',
+    });
+    setError('');
+
+    try {
+      const clearedBook = { ...book, characterSheetUrl: '', characterSheetCreatedAt: '' };
+      const nextBook = await ensureCharacterSheet(clearedBook, modelSettings, {
+        signal: controller.signal,
+      });
+      throwIfStopped(controller);
+      setBook(nextBook);
+      rememberBookInHistory(nextBook);
+    } catch (err) {
+      if (!isAbortError(err)) {
+        setError(err.message || 'Unable to create a character sheet. Please try again.');
+      }
+    } finally {
+      finishAbortableRequest(controller);
+      setProcessState(idleProcessState);
+    }
+  };
+
+  const handleUpdateImageSeed = (seed) => {
+    if (!book) {
+      return;
+    }
+
+    const parsed = Math.floor(Number(seed));
+    const nextSeed = Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : Math.floor(Math.random() * 2 ** 31);
+    const nextBook = { ...book, imageSeed: nextSeed };
+
+    setBook(nextBook);
+    rememberBookInHistory(nextBook);
+  };
+
+  const handleRegenerateLocationSheet = async () => {
+    if (!book) {
+      return;
+    }
+
+    const controller = startAbortableRequest();
+    setProcessState({
+      stage: 'location-sheet',
+      message: 'Drawing a new background sheet...',
+      detail: 'Creating a fresh background/location plate. Use Retry all pictures afterwards to apply it to every page.',
+    });
+    setError('');
+
+    try {
+      const clearedBook = { ...book, locationSheetUrl: '', locationSheetCreatedAt: '' };
+      const nextBook = await ensureLocationSheet(clearedBook, modelSettings, {
+        signal: controller.signal,
+      });
+      throwIfStopped(controller);
+      setBook(nextBook);
+      rememberBookInHistory(nextBook);
+    } catch (err) {
+      if (!isAbortError(err)) {
+        setError(err.message || 'Unable to create a background sheet. Please try again.');
       }
     } finally {
       finishAbortableRequest(controller);
@@ -747,11 +940,15 @@ function App() {
           >
             <PromptForm
               onGenerate={handleGenerate}
+              onSaveSetup={handleSaveSetup}
               onStop={handleStopRequest}
               loading={loading}
               processState={processState}
               modelSettings={modelSettings}
               characterToUse={characterToUse}
+              initialDraft={initialSetupDraft}
+              initialDraftVersion={setupDraftVersion}
+              setupSaveStatus={setupSaveStatus}
               onDraftChange={setCurrentDraftRequest}
             />
           </div>
@@ -770,6 +967,9 @@ function App() {
               onStop={handleStopRequest}
               onGenerateBookImages={handleGenerateBookImages}
               onRegeneratePageImage={handleRegeneratePageImage}
+              onRegenerateCharacterSheet={handleRegenerateCharacterSheet}
+              onRegenerateLocationSheet={handleRegenerateLocationSheet}
+              onUpdateImageSeed={handleUpdateImageSeed}
               onUpdatePageContent={handleUpdatePageContent}
               onRegeneratePageText={handleRegeneratePageText}
               onSaveStory={handleSaveStory}
@@ -824,6 +1024,7 @@ function App() {
           onOpenStory={(historyBook) => {
             setBook(historyBook);
             setLastGeneratedRequest(historyBook?.requestSnapshot || null);
+            applyInitialSetupDraft(historyBook?.requestSnapshot || historyBook?.savedSetupSnapshot || null);
             if (uiMode === 'guided') {
               setActiveStep(getStepForBook(historyBook));
             }
@@ -831,6 +1032,7 @@ function App() {
           }}
           onRecreateStory={(request) => {
             setShowHistory(false);
+            applyInitialSetupDraft(request);
             if (uiMode === 'guided') {
               setActiveStep('story');
             }
@@ -977,6 +1179,10 @@ function resetBookImagesForRetry(book) {
   return {
     ...book,
     workflowStage: 'image-building',
+    characterSheetUrl: '',
+    characterSheetCreatedAt: '',
+    locationSheetUrl: '',
+    locationSheetCreatedAt: '',
     generatedStyleReferenceUrl: '',
     generatedStyleReferencePage: null,
     generatedStyleReferenceCreatedAt: '',
@@ -1022,6 +1228,58 @@ function buildImageRetryPlaceholder(pageNumber) {
 </svg>`;
 
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+async function ensureCharacterSheet(book, modelSettings, options = {}) {
+  if (!book || book.characterSheetUrl) {
+    return book;
+  }
+
+  try {
+    const withSheet = await generateCharacterSheet(book, modelSettings, options);
+    const compressed = await compressCharacterSheet(withSheet.characterSheetUrl);
+
+    return compressed ? { ...withSheet, characterSheetUrl: compressed } : withSheet;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    console.warn('AIStory could not create a character sheet. Pages will use fallback anchors.', error);
+    return book;
+  }
+}
+
+async function ensureLocationSheet(book, modelSettings, options = {}) {
+  if (!book || book.locationSheetUrl) {
+    return book;
+  }
+
+  try {
+    const withSheet = await generateLocationSheet(book, modelSettings, options);
+    const compressed = await compressCharacterSheet(withSheet.locationSheetUrl);
+
+    return compressed ? { ...withSheet, locationSheetUrl: compressed } : withSheet;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    console.warn('AIStory could not create a background sheet. Pages will use fallback anchors.', error);
+    return book;
+  }
+}
+
+function compressCharacterSheet(sheetUrl) {
+  const value = String(sheetUrl || '');
+
+  // SVG sheets (local demo) are already tiny; only raster sheets need shrinking
+  // before they are re-sent with every page image request.
+  if (!value.startsWith('data:image/') || value.startsWith('data:image/svg')) {
+    return Promise.resolve('');
+  }
+
+  return createCompressedImageReference(value);
 }
 
 async function ensureGeneratedStyleReference(book, preferredPageNumber = null) {

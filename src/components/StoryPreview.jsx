@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { getStoryProgress } from '../api/backendClient';
 
 function StoryPreview({
   book,
@@ -7,6 +8,9 @@ function StoryPreview({
   onStop,
   onGenerateBookImages,
   onRegeneratePageImage,
+  onRegenerateCharacterSheet,
+  onRegenerateLocationSheet,
+  onUpdateImageSeed,
   onUpdatePageContent,
   onRegeneratePageText,
   onSaveStory,
@@ -20,6 +24,9 @@ function StoryPreview({
   const [editText, setEditText] = useState('');
   const [editImageDescription, setEditImageDescription] = useState('');
   const [rewriteInstruction, setRewriteInstruction] = useState('');
+  const [elapsed, setElapsed] = useState(0);
+  const [liveProgress, setLiveProgress] = useState(null);
+  const a4TextRef = useRef(null);
   const selectedPage = book?.pages?.find((page) => page.pageNumber === activePage) || book?.pages?.[0];
   const hasPendingImages = Boolean(book?.pages?.some((page) => page.imageStatus === 'pending'));
   const hasFailedImages = Boolean(book?.pages?.some((page) => page.imageStatus === 'failed'));
@@ -67,12 +74,73 @@ function StoryPreview({
     }
   }, [processState?.stage, processState?.currentPage]);
 
+  useEffect(() => {
+    if (!loading) {
+      setElapsed(0);
+      return undefined;
+    }
+
+    const start = Date.now();
+    setElapsed(0);
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!loading) {
+      setLiveProgress(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      const progress = await getStoryProgress();
+      if (!cancelled) {
+        setLiveProgress(progress);
+      }
+    };
+
+    poll();
+    const id = window.setInterval(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [loading]);
+
+  // Shrink the A4 page text so it always fits the fixed-size page, no matter how
+  // long the page is. Re-runs per page, on resize, and once web fonts are ready.
+  useEffect(() => {
+    const fit = () => fitTextToBox(a4TextRef.current, 11, 28);
+    const raf = window.requestAnimationFrame(fit);
+    window.addEventListener('resize', fit);
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(fit).catch(() => {});
+    }
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', fit);
+    };
+  }, [selectedPage?.pageNumber, selectedPage?.text, book?.id, isStoryDraft, isRtlBook]);
+
   if (loading && !book) {
     return (
       <section className="panel empty-preview">
         <div className="loader" />
         <h2>{processState?.message || 'Working on your story...'}</h2>
         <p>{processState?.detail || 'The app is preparing the next step.'}</p>
+        <div className="image-progress empty-preview-progress">
+          <div className="progress-indeterminate" />
+          <small className="live-status">
+            {liveProgress?.active && <span className={`status-dot ${liveStatusDotClass(liveProgress)}`} />}
+            {liveStatusText(liveProgress, elapsed)}
+          </small>
+        </div>
         <button
           type="button"
           className="stop-button"
@@ -106,7 +174,19 @@ function StoryPreview({
   }
 
   const handlePrint = () => {
+    // The browser uses document.title as the default "Save as PDF" filename, so
+    // swap in the book title while the print dialog is open, then restore it.
+    const previousTitle = document.title;
+    document.title = buildPrintTitle(book);
+
+    const restoreTitle = () => {
+      document.title = previousTitle;
+      window.removeEventListener('afterprint', restoreTitle);
+    };
+
+    window.addEventListener('afterprint', restoreTitle);
     window.print();
+    window.setTimeout(restoreTitle, 1500);
   };
 
   const goToPreviousPage = () => {
@@ -208,6 +288,9 @@ function StoryPreview({
             <span>{book.language || 'English'}</span>
             <span>{book.storyModel}</span>
             <span>{book.imageModel}</span>
+            {book.createdAt && (
+              <span title="When this book was generated">Generated {formatDateTime(book.createdAt)}</span>
+            )}
           </div>
         </div>
         <div className="preview-actions">
@@ -243,7 +326,7 @@ function StoryPreview({
           <div>
             <strong>{processState?.message || 'Working...'}</strong>
             <p>{processState?.detail || 'Please keep this page open while the process runs.'}</p>
-            {processState?.totalImages > 0 && (
+            {processState?.totalImages > 0 ? (
               <div className="image-progress">
                 <div className="image-progress-track">
                   <span
@@ -257,6 +340,14 @@ function StoryPreview({
                   {processState.estimatedRemainingSeconds
                     ? `, about ${formatDuration(processState.estimatedRemainingSeconds)} left`
                     : ''}
+                </small>
+              </div>
+            ) : (
+              <div className="image-progress">
+                <div className="progress-indeterminate" />
+                <small className="live-status">
+                  {liveProgress?.active && <span className={`status-dot ${liveStatusDotClass(liveProgress)}`} />}
+                  {liveStatusText(liveProgress, elapsed)}
                 </small>
               </div>
             )}
@@ -521,6 +612,24 @@ function StoryPreview({
             >
               Retry all pictures
             </button>
+            <div className="seed-control" title="Seed for local image generation. Applies on the next image build / retry.">
+              <label htmlFor="image-seed">Seed</label>
+              <input
+                id="image-seed"
+                type="number"
+                value={book.imageSeed || 0}
+                onChange={(event) => onUpdateImageSeed?.(event.target.value)}
+                disabled={loading}
+              />
+              <button
+                type="button"
+                className="icon-text-button"
+                onClick={() => onUpdateImageSeed?.(0)}
+                disabled={loading}
+              >
+                Reroll
+              </button>
+            </div>
           </div>
           </div>
 
@@ -530,9 +639,8 @@ function StoryPreview({
                 <img src={selectedPage.imageUrl} alt={`Final book page ${selectedPage.pageNumber}`} />
               </div>
               <div className="a4-copy" dir={isRtlBook ? 'rtl' : 'ltr'}>
-                <span className="a4-page-number">Page {selectedPage.pageNumber}</span>
-                <h4>{book.storyTitle}</h4>
-                <p>{selectedPage.text}</p>
+                <span className="a4-page-number">{selectedPage.pageNumber}</span>
+                <p ref={a4TextRef}>{selectedPage.text}</p>
               </div>
             </article>
           </div>
@@ -576,6 +684,48 @@ function StoryPreview({
           <h3>{book.visualBible?.mainCharacter || 'Main character'}</h3>
           <p>{book.visualBible?.setting || 'Story setting'}</p>
         </div>
+        {book.characterSheetUrl && (
+          <div className="character-sheet-block">
+            <div className="character-sheet-preview">
+              <img src={book.characterSheetUrl} alt="Cast and style reference sheet" />
+            </div>
+            <div className="character-sheet-meta">
+              <strong>Character sheet</strong>
+              <span>Drawn once and reused as the identity anchor for every page, so characters stay consistent.</span>
+              {!isStoryDraft && (
+                <button
+                  type="button"
+                  className="icon-text-button"
+                  onClick={onRegenerateCharacterSheet}
+                  disabled={loading}
+                >
+                  {processState?.stage === 'character-sheet' ? 'Drawing sheet...' : 'Regenerate character sheet'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {book.locationSheetUrl && (
+          <div className="character-sheet-block">
+            <div className="character-sheet-preview">
+              <img src={book.locationSheetUrl} alt="Background and location reference sheet" />
+            </div>
+            <div className="character-sheet-meta">
+              <strong>Background sheet</strong>
+              <span>Drawn once and reused as the setting anchor for every page, so the background stays consistent.</span>
+              {!isStoryDraft && (
+                <button
+                  type="button"
+                  className="icon-text-button"
+                  onClick={onRegenerateLocationSheet}
+                  disabled={loading}
+                >
+                  {processState?.stage === 'location-sheet' ? 'Drawing sheet...' : 'Regenerate background sheet'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {characters.length > 0 && (
           <div className="cast-grid">
             {characters.map((character) => (
@@ -671,9 +821,8 @@ function StoryPreview({
               <img src={page.imageUrl} alt="" />
             </div>
             <div className="print-copy" dir={isRtlBook ? 'rtl' : 'ltr'}>
-              <span>Page {page.pageNumber}</span>
-              <h2>{book.storyTitle}</h2>
-              <p>{page.text}</p>
+              <span>{page.pageNumber}</span>
+              <p style={{ fontSize: printFontSize(page.text) }}>{page.text}</p>
             </div>
           </article>
         ))}
@@ -682,12 +831,136 @@ function StoryPreview({
   );
 }
 
+function buildPrintTitle(book) {
+  const base = String(book?.storyTitle || book?.id || 'storybook')
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return base || 'storybook';
+}
+
 function isRtlLanguage(language) {
   return /hebrew|עברית|arabic|urdu|persian|farsi/i.test(String(language || ''));
 }
 
 function hasHebrewText(value) {
   return /[\u0590-\u05ff]/.test(String(value || ''));
+}
+
+function isProgressRecent(live) {
+  return typeof live?.lastChunkSecondsAgo === 'number' && live.lastChunkSecondsAgo < 20;
+}
+
+function liveStatusText(live, elapsed) {
+  if (live && live.active) {
+    const words = live.words || 0;
+    const recent = isProgressRecent(live);
+
+    // Story text is streaming.
+    if (words > 0) {
+      return recent
+        ? `Writing the story - ${words} words`
+        : `Writing paused - ${words} words, no new text for ${live.lastChunkSecondsAgo}s`;
+    }
+
+    // Thinking model: reasoning tokens arrive before the story text. Show this as
+    // live activity so a long "thinking" phase doesn't look frozen.
+    if (live.phase === 'thinking') {
+      const reasoningWords = live.thinkingChars ? Math.round(live.thinkingChars / 5) : 0;
+      return recent
+        ? `Thinking through the story...${reasoningWords ? ` (~${reasoningWords} words of reasoning)` : ''}`
+        : `Thinking paused for ${live.lastChunkSecondsAgo}s - the model may be stuck`;
+    }
+
+    if (live.serverAlive === false) {
+      return 'Model server is not responding - it may have crashed or run out of memory.';
+    }
+
+    if (live.serverAlive === true) {
+      return 'Model is working - thinking before the first words (this can take a while).';
+    }
+
+    return 'Model is loaded, warming up...';
+  }
+
+  return elapsed ? `Working - ${formatDuration(elapsed)} elapsed` : 'Working...';
+}
+
+function liveStatusDotClass(live) {
+  if (!live || !live.active) {
+    return 'status-dot-pending';
+  }
+
+  // Any token (story content or reasoning) arriving recently = alive.
+  if (isProgressRecent(live)) {
+    return 'status-dot-online';
+  }
+
+  if (live.serverAlive === false) {
+    return 'status-dot-offline';
+  }
+
+  return 'status-dot-pending';
+}
+
+function fitTextToBox(el, minPx, maxPx) {
+  if (!el || !el.clientHeight) {
+    return;
+  }
+
+  let lo = minPx;
+  let hi = maxPx;
+  let best = minPx;
+
+  // Binary-search the largest font size whose content still fits the box height.
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    el.style.fontSize = `${mid}px`;
+    if (el.scrollHeight <= el.clientHeight) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  el.style.fontSize = `${best}px`;
+}
+
+function printFontSize(text) {
+  const length = String(text || '').length;
+
+  if (length <= 250) {
+    return '18pt';
+  }
+
+  if (length >= 950) {
+    return '11pt';
+  }
+
+  const size = 18 - ((length - 250) / (950 - 250)) * (18 - 11);
+  return `${size.toFixed(1)}pt`;
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatDuration(totalSeconds) {

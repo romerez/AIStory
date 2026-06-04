@@ -380,6 +380,7 @@ export async function generateLocalBook(request) {
   return {
     id: `local_${Date.now()}`,
     createdAt: new Date().toISOString(),
+    imageSeed: createImageSeed(),
     source: 'local-demo',
     storyModel: request.storyModelLabel || 'Local demo writer',
     imageModel: request.imageModelLabel || 'Local demo illustrator',
@@ -502,9 +503,10 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
     };
   });
 
-  return {
+  const book = {
     id: `${source}_${Date.now()}`,
     createdAt: new Date().toISOString(),
+    imageSeed: createImageSeed(),
     source,
     storyModel: request.storyModelLabel || 'Story model',
     imageModel: request.imageModelLabel || 'Local demo illustrator',
@@ -517,6 +519,85 @@ export function createBookFromStoryDraft(request, draft, source = 'api') {
     visualBible,
     pages,
   };
+
+  // Hard "lock character looks" option (default on): pin each character's look and
+  // bake it identically into every page prompt so it can't drift.
+  return request.lockCharacterLooks === false ? book : applyCharacterLookLock(book);
+}
+
+// Pins each character's look to the first concrete "(look)" the story gave them,
+// then rebuilds every page prompt so that exact look repeats identically. This is
+// the app-enforced consistency guarantee, independent of the model's discipline.
+function applyCharacterLookLock(book) {
+  const characters = book?.visualBible?.characters || [];
+
+  if (!characters.length || !Array.isArray(book?.pages) || !book.pages.length) {
+    return book;
+  }
+
+  const lockedCharacters = characters.map((character) => {
+    const appearance = character.appearance
+      || deriveCharacterAppearance(character.name, book.pages);
+    return appearance ? { ...character, appearance } : character;
+  });
+
+  const locked = lockedCharacters.filter((character) => character.appearance);
+
+  if (!locked.length) {
+    return book;
+  }
+
+  // Normalize each page's imageDescription so every "<name> (...)" uses the one
+  // canonical look - removing the per-page drift at the source - then rebuild the
+  // page prompt (which also restates the locked look authoritatively).
+  const normalizedPages = book.pages.map((page) => {
+    let imageDescription = String(page?.imageDescription || '');
+    for (const character of locked) {
+      const pattern = new RegExp(`${escapeForRegExp(character.name)}\\s*\\([^)]*\\)`, 'g');
+      imageDescription = imageDescription.replace(pattern, `${character.name} (${character.appearance})`);
+    }
+    return { ...page, imageDescription };
+  });
+
+  const lockedBook = {
+    ...book,
+    lockCharacterLooks: true,
+    visualBible: { ...book.visualBible, characters: lockedCharacters },
+    pages: normalizedPages,
+  };
+
+  return {
+    ...lockedBook,
+    pages: lockedBook.pages.map((page) => ({
+      ...page,
+      illustrationPrompt: buildIllustrationPromptForPage(lockedBook, page),
+    })),
+  };
+}
+
+function deriveCharacterAppearance(name, pages) {
+  const cleanName = String(name || '').trim();
+
+  if (!cleanName) {
+    return '';
+  }
+
+  // Match "<name> (the look ...)" inside any page's imageDescription and take the
+  // first concrete look as canonical.
+  const pattern = new RegExp(`${escapeForRegExp(cleanName)}\\s*\\(([^)]{3,160})\\)`);
+
+  for (const page of pages) {
+    const match = String(page?.imageDescription || '').match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return '';
+}
+
+function escapeForRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function regenerateLocalPageImage(book, pageNumber) {
@@ -969,30 +1050,31 @@ function buildIllustrationPrompt({
     const reference = character.hasReferenceImage
       ? `Keep close to the supplied reference for ${character.name}: ${formatReferenceSource(character.referenceImageUrl)}.`
       : `Design ${character.name} from description only.`;
+    const lockedLook = character.appearance
+      ? ` ALWAYS draw ${character.name} with this exact, unchanging look on every page: ${character.appearance}.`
+      : '';
 
-    return `${character.name}: ${character.description}; role: ${character.role}. ${reference}`;
+    return `${character.name}: ${character.description}; role: ${character.role}.${lockedLook} ${reference}`;
   });
 
   return [
-    `Page ${pageNumber} children's book illustration.`,
-    visualBible.mainCharacter,
-    `Cast: ${characterInstructions.join(' ')}`,
+    // Front-load the medium, style, and cast identity: these tokens matter most for
+    // cross-page consistency, so they should not be buried under instruction walls.
+    `Children's picture-book illustration, page ${pageNumber}. One ${styleInstruction} scene.`,
+    `Main character: ${visualBible.mainCharacter}.`,
+    `Cast (keep each identity identical on every page): ${characterInstructions.join(' ')}`,
+    // This specific page.
+    `This page shows: ${imageDescription}`,
+    // Stable world.
     `Setting: ${setting}.`,
-    `Style: ${styleInstruction}.`,
     `Palette: ${visualBible.palette.join(', ')}.`,
     `Recurring details: ${visualBible.repeatedVisualDetails.join(', ')}.`,
-    'Character consistency lock: keep each named character with the same face shape, hair, skin tone, body proportions, outfit, clothing colors, accessories, and overall illustration style on every page.',
-    `Location and layout lock: keep the same physical stage across pages: ${setting}. Preserve the same indoor/outdoor choice, stable background landmarks, central props, and the general left-to-right relationship of recurring characters and objects. Do not move to a different room, classroom, park, or outdoor/indoor location unless the page text explicitly says the story moved.`,
-    'Environment consistency lock: keep the same core world, lighting mood, palette, and recurring background details across pages; only change the camera angle, pose, action, and small props needed for this page.',
-    'If the page image description conflicts with the location and layout lock, keep the locked location and translate only the action, emotion, and page-specific props into that same stage.',
-    'If a character description or reference image includes clothing, preserve it exactly. If clothing is not specified, infer one simple outfit and keep it unchanged throughout the book.',
-    'Landscape-safe framing: place the full important scene comfortably inside the image with generous margins. Do not crop faces, hands, bodies, key objects, or important background details at the edges.',
-    `Page image description: ${imageDescription}.`,
-    `Scene text to illustrate: ${text}`,
     referenceInstruction,
-    'Use the page image description as the main composition plan, and use the page text as narrative context.',
-    'Keep every recurring character visually consistent with the visual bible and any supplied picture references.',
-    'Gentle, child-safe, no scary imagery, no readable text inside the image.',
+    // Compact consistency + framing locks (kept short so identity stays prominent).
+    "Consistency lock: keep every named character's face shape, hair, skin tone, body proportions, outfit, clothing colors, and accessories identical across pages; preserve any supplied reference identity exactly. If clothing is unspecified, choose one simple outfit and keep it for the whole book.",
+    `Scene follows the story: the background should match where THIS page's scene happens, with ${setting} as the home base. Keep recurring places consistent (the same place looks the same each time it appears) and move to a new background only when the story moves there - scenes change as the story progresses, like a TV episode in one world, not a random new background on every page. Keep the characters, their outfits, companions, palette, and art style consistent across pages.`,
+    'Landscape-safe framing: fit the whole scene inside the frame with generous margins; do not crop faces, hands, bodies, or key objects.',
+    'Gentle and child-safe. No scary imagery. No readable text inside the image.',
   ].join(' ');
 }
 
@@ -1117,6 +1199,82 @@ function buildCharacterSvg({ index, count, pageNumber, character, x, y, primary,
     <path d="M-16 82 L0 56 L16 82 L-12 66 L12 66 Z" fill="${primary}" opacity="0.95"/>
     ${marker}
   </g>`;
+}
+
+export function buildLocalCharacterSheet(book) {
+  const styleProfile = getStyleProfile(book?.artStyle);
+  const themeProfile = getThemeProfile(book?.theme);
+  const characters = book?.visualBible?.characters?.length
+    ? book.visualBible.characters
+    : normalizeCharacters([], { prompt: book?.storySummary || '', styleProfile });
+  const [primary, secondary, accent, paper] = themeProfile.palette;
+  const count = Math.max(1, characters.length);
+  const groups = characters
+    .map((character, index) => buildCharacterSvg({
+      index,
+      count,
+      pageNumber: 1,
+      character,
+      x: (800 / (count + 1)) * (index + 1),
+      y: 312,
+      primary,
+      accent,
+      paper,
+    }))
+    .join('');
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 460">
+  <rect width="800" height="460" fill="${paper}"/>
+  <rect x="16" y="16" width="768" height="428" rx="26" fill="#ffffff" stroke="${secondary}" stroke-width="3"/>
+  <rect x="16" y="16" width="768" height="58" rx="26" fill="${primary}" opacity="0.18"/>
+  <circle cx="64" cy="45" r="14" fill="${accent}" opacity="0.85"/>
+  ${groups}
+  <g opacity="0.5">
+    <circle cx="120" cy="404" r="8" fill="${secondary}"/>
+    <circle cx="680" cy="404" r="8" fill="${accent}"/>
+  </g>
+</svg>`;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+export function buildLocalLocationSheet(book) {
+  const themeProfile = getThemeProfile(book?.theme);
+  const styleProfile = getStyleProfile(book?.artStyle);
+  const [primary, secondary, accent, paper] = themeProfile.palette;
+  const textureOpacity = styleProfile.description.includes('crayon') ? 0.18 : 0.08;
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560">
+  <defs>
+    <linearGradient id="locsky" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="${paper}"/>
+      <stop offset="58%" stop-color="${secondary}"/>
+      <stop offset="100%" stop-color="${primary}"/>
+    </linearGradient>
+    <filter id="locpaper">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="table" tableValues="0 ${textureOpacity}"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="800" height="560" fill="url(#locsky)"/>
+  <rect width="800" height="560" filter="url(#locpaper)" opacity="0.65"/>
+  <circle cx="150" cy="105" r="46" fill="${accent}" opacity="0.82"/>
+  <path d="M0 392 C170 320, 300 430, 470 356 C610 296, 710 360, 800 314 L800 560 L0 560 Z" fill="${primary}" opacity="0.78"/>
+  <path d="M0 432 C150 386, 290 458, 440 410 C610 356, 690 420, 800 372 L800 560 L0 560 Z" fill="${paper}" opacity="0.74"/>
+  <g opacity="0.52">
+    <circle cx="92" cy="212" r="13" fill="${accent}"/>
+    <circle cx="696" cy="182" r="9" fill="${paper}"/>
+    <circle cx="642" cy="250" r="16" fill="${secondary}"/>
+  </g>
+</svg>`;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function createImageSeed() {
+  return Math.floor(Math.random() * 2 ** 31);
 }
 
 function clamp(value, min, max) {

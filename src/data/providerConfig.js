@@ -1,5 +1,7 @@
 export const defaultModelSettings = {
-  settingsVersion: 3,
+  settingsVersion: 4,
+  storyPromptStyle: 'classic',
+  lockCharacterLooks: true,
   activeStoryModelId: 'google-gemini-2-5-flash',
   activeImageModelId: 'google-gemini-2-5-flash-image',
   providerKeys: {
@@ -21,6 +23,20 @@ export const defaultModelSettings = {
       apiKey: '',
       type: 'local',
       locked: true,
+    },
+    {
+      // Local LLM via Ollama's OpenAI-compatible endpoint. No API key needed.
+      // First: `ollama pull hf.co/dicta-il/DictaLM-3.0-24B-Thinking-GGUF:Q4_K_M`.
+      // DictaLM is Hebrew-native, so it pairs well with the Hebrew + niqqud path.
+      id: 'dicta-lm-3-local',
+      label: 'DictaLM 3.0 24B (local)',
+      provider: 'Local (Ollama)',
+      icon: 'ד',
+      modelName: 'hf.co/dicta-il/DictaLM-3.0-24B-Thinking-GGUF:Q4_K_M',
+      endpoint: 'http://localhost:11434/v1/chat/completions',
+      apiKey: '',
+      type: 'openai-compatible',
+      locked: false,
     },
     {
       id: 'openai-gpt-5-5',
@@ -108,39 +124,6 @@ export const defaultModelSettings = {
       endpoint: 'https://api.anthropic.com/v1/messages',
       apiKey: '',
       type: 'anthropic-messages',
-      locked: true,
-    },
-    {
-      id: 'google-gemini-3-5-flash',
-      label: 'Google Gemini 3.5 Flash',
-      provider: 'Google',
-      icon: 'G',
-      modelName: 'gemini-3.5-flash',
-      endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
-      apiKey: '',
-      type: 'google-gemini',
-      locked: true,
-    },
-    {
-      id: 'google-gemini-3-1-pro',
-      label: 'Google Gemini 3.1 Pro',
-      provider: 'Google',
-      icon: 'G',
-      modelName: 'gemini-3.1-pro',
-      endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro:generateContent',
-      apiKey: '',
-      type: 'google-gemini',
-      locked: true,
-    },
-    {
-      id: 'google-gemini-3-1-flash-lite',
-      label: 'Google Gemini 3.1 Flash-Lite',
-      provider: 'Google',
-      icon: 'G',
-      modelName: 'gemini-3.1-flash-lite',
-      endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',
-      apiKey: '',
-      type: 'google-gemini',
       locked: true,
     },
     {
@@ -288,8 +271,69 @@ export const defaultModelSettings = {
       type: 'custom-image',
       locked: false,
     },
+    {
+      // Local ComfyUI via the image proxy (local-stack/image-proxy, port 8989).
+      // No API key needed. `modelName` selects the proxy workflow file.
+      id: 'comfyui-flux-schnell',
+      label: 'ComfyUI FLUX schnell (fast)',
+      provider: 'Local (ComfyUI)',
+      icon: 'C',
+      modelName: 'flux-storybook',
+      endpoint: 'http://127.0.0.1:8989/v1/images/generations',
+      apiKey: '',
+      type: 'custom-image',
+      locked: false,
+    },
+    {
+      id: 'comfyui-sdxl',
+      label: 'ComfyUI SDXL',
+      provider: 'Local (ComfyUI)',
+      icon: 'C',
+      modelName: 'sdxl-storybook',
+      endpoint: 'http://127.0.0.1:8989/v1/images/generations',
+      apiKey: '',
+      type: 'custom-image',
+      supportsNegativePrompt: true,
+      locked: false,
+    },
+    {
+      // Uses the character + background sheets as IP-Adapter references for
+      // strong cross-page consistency.
+      id: 'comfyui-sdxl-consistent',
+      label: 'ComfyUI SDXL Consistent (IP-Adapter)',
+      provider: 'Local (ComfyUI)',
+      icon: 'C',
+      modelName: 'sdxl-ipadapter-storybook',
+      endpoint: 'http://127.0.0.1:8989/v1/images/generations',
+      apiKey: '',
+      type: 'custom-image',
+      supportsReferences: true,
+      referenceLimit: 2,
+      supportsNegativePrompt: true,
+      locked: false,
+    },
+    {
+      id: 'comfyui-sdxl-consistent-hires',
+      label: 'ComfyUI SDXL Consistent (Hi-Res)',
+      provider: 'Local (ComfyUI)',
+      icon: 'C',
+      modelName: 'sdxl-ipadapter-storybook-hires',
+      endpoint: 'http://127.0.0.1:8989/v1/images/generations',
+      apiKey: '',
+      type: 'custom-image',
+      supportsReferences: true,
+      referenceLimit: 2,
+      supportsNegativePrompt: true,
+      locked: false,
+    },
   ],
 };
+
+const obsoleteBuiltInModelIds = new Set([
+  'google-gemini-3-5-flash',
+  'google-gemini-3-1-pro',
+  'google-gemini-3-1-flash-lite',
+]);
 
 export const providerKeyProfiles = [
   {
@@ -352,6 +396,10 @@ export function mergeModelSettings(savedSettings) {
 
   return {
     settingsVersion: defaultModelSettings.settingsVersion,
+    storyPromptStyle: ['classic', 'storyteller', 'playful', 'bedtime'].includes(saved.storyPromptStyle)
+      ? saved.storyPromptStyle
+      : 'classic',
+    lockCharacterLooks: saved.lockCharacterLooks !== false,
     providerKeys,
     activeStoryModelId: getActiveProfileId(
       saved.activeStoryModelId,
@@ -441,7 +489,11 @@ function mergeProviderKeys(saved) {
 
 function mergeProfiles(defaultProfiles, savedProfiles, providerKeys) {
   const savedList = Array.isArray(savedProfiles)
-    ? savedProfiles.filter((profile) => profile && typeof profile === 'object')
+    ? savedProfiles.filter((profile) => (
+      profile
+      && typeof profile === 'object'
+      && !obsoleteBuiltInModelIds.has(profile.id)
+    ))
     : [];
   const savedById = new Map(savedList.map((profile) => [profile.id, profile]));
   const mergedDefaults = defaultProfiles.map((profile) => {

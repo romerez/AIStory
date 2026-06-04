@@ -1,0 +1,107 @@
+{
+  "defaultWidth": 1216,
+  "defaultHeight": 832,
+  "_comment": "SDXL base + IP-Adapter Plus (ComfyUI_IPAdapter_plus). Reference #1 (${REF_IMAGE_1}) anchors character identity; reference #2 (${REF_IMAGE_2}) anchors the background/location. The proxy uploads the references and substitutes the filenames. If only one reference is sent, the proxy fills ${REF_IMAGE_2} with reference #1. Node names/inputs follow the cubiq IPAdapter_plus API; if ComfyUI errors on nodes 12-14, verify they match the installed custom-node version.",
+  "template": {
+    "3": {
+      "inputs": {
+        "seed": "${SEED}",
+        "steps": 30,
+        "cfg": 7.0,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "denoise": 1.0,
+        "model": ["14", 0],
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "latent_image": ["5", 0]
+      },
+      "class_type": "KSampler"
+    },
+    "4": {
+      "inputs": {
+        "ckpt_name": "sd_xl_base_1.0.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "5": {
+      "inputs": {
+        "width": "${WIDTH}",
+        "height": "${HEIGHT}",
+        "batch_size": 1
+      },
+      "class_type": "EmptyLatentImage"
+    },
+    "6": {
+      "inputs": {
+        "text": "${PROMPT}",
+        "clip": ["4", 1]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "7": {
+      "inputs": {
+        "text": "${NEGATIVE_PROMPT}",
+        "clip": ["4", 1]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "8": {
+      "inputs": {
+        "samples": ["3", 0],
+        "vae": ["4", 2]
+      },
+      "class_type": "VAEDecode"
+    },
+    "9": {
+      "inputs": {
+        "filename_prefix": "aistory_ip",
+        "images": ["8", 0]
+      },
+      "class_type": "SaveImage"
+    },
+    "10": {
+      "inputs": {
+        "image": "${REF_IMAGE_1}"
+      },
+      "class_type": "LoadImage"
+    },
+    "11": {
+      "inputs": {
+        "image": "${REF_IMAGE_2}"
+      },
+      "class_type": "LoadImage"
+    },
+    "12": {
+      "inputs": {
+        "model": ["4", 0],
+        "preset": "PLUS (high strength)"
+      },
+      "class_type": "IPAdapterUnifiedLoader"
+    },
+    "13": {
+      "inputs": {
+        "model": ["12", 0],
+        "ipadapter": ["12", 1],
+        "image": ["10", 0],
+        "weight": 0.7,
+        "weight_type": "standard",
+        "start_at": 0.0,
+        "end_at": 1.0
+      },
+      "class_type": "IPAdapter"
+    },
+    "14": {
+      "inputs": {
+        "model": ["13", 0],
+        "ipadapter": ["12", 1],
+        "image": ["11", 0],
+        "weight": 0.5,
+        "weight_type": "standard",
+        "start_at": 0.0,
+        "end_at": 1.0
+      },
+      "class_type": "IPAdapter"
+    }
+  }
+}

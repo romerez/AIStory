@@ -76,7 +76,7 @@ function normalizeHistoryEntry(entry = {}) {
   };
 }
 
-function normalizeHistoryRequest(request = {}) {
+export function normalizeHistoryRequest(request = {}) {
   if (!request || typeof request !== 'object') {
     return null;
   }
